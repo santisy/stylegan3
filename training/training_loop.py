@@ -8,23 +8,25 @@
 
 """Main training loop."""
 
-import os
-import time
 import copy
 import json
+import os
+import math
 import pickle
-import psutil
-import PIL.Image
-import numpy as np
-import torch
-import dnnlib
-from torch_utils import misc
-from torch_utils import training_stats
-from torch_utils.ops import conv2d_gradfix
-from torch_utils.ops import grid_sample_gradfix
+import time
 
+import numpy as np
+import PIL.Image
+import psutil
+import torch
+import torchvision.utils as tvu
+
+import dnnlib
 import legacy
 from metrics import metric_main
+from torch_utils import misc, training_stats
+from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
+from utils.dist_utils import dprint
 
 #----------------------------------------------------------------------------
 
@@ -133,24 +135,24 @@ def training_loop(
     grid_sample_gradfix.enabled = True                  # Avoids errors with the augmentation pipe.
 
     # Load training set.
-    if rank == 0:
-        print('Loading training set...')
+    dprint('Loading training set...')
     training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
     training_set_sampler = misc.InfiniteSampler(dataset=training_set, rank=rank, num_replicas=num_gpus, seed=random_seed)
     training_set_iterator = iter(torch.utils.data.DataLoader(dataset=training_set, sampler=training_set_sampler, batch_size=batch_size//num_gpus, **data_loader_kwargs))
-    if rank == 0:
-        print()
-        print('Num images: ', len(training_set))
-        print('Image shape:', training_set.image_shape)
-        print('Label shape:', training_set.label_shape)
-        print()
+    dprint('\n')
+    dprint(f'Num images: {len(training_set)}')
+    dprint(f'Image shape: {training_set.image_shape}')
+    dprint(f'Label shape: {training_set.label_shape}')
+    dprint('\n')
 
     # Construct networks.
-    if rank == 0:
-        print('Constructing networks...')
+    dprint('Constructing networks...')
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels)
-    G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+    common_kwargs.update(dict(img_size=training_set.resolution,
+                              mlp_out_dim=training_set.num_channels,
+                              res_max=training_set.resolution))
+    G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
 
     # Resume from existing pickle.
@@ -225,8 +227,7 @@ def training_loop(
         save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
 
     # Initialize logs.
-    if rank == 0:
-        print('Initializing logs...')
+    dprint('Initializing logs...')
     stats_collector = training_stats.Collector(regex='.*')
     stats_metrics = dict()
     stats_jsonl = None
@@ -352,6 +353,15 @@ def training_loop(
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+            if stats_tfevents is not None:
+                global_step = int(cur_nimg / 1e3)
+                stats_tfevents.add_image(f'fake', tvu.make_grid(
+                    torch.tensor(images[:16]),
+                    nrow=min(4, int(math.ceil(images.shape[0]) ** 0.5)),
+                    normalize=True,
+                    value_range=(-1,1)
+                ), global_step)
+
 
         # Save network snapshot.
         snapshot_pkl = None
@@ -373,7 +383,7 @@ def training_loop(
                     pickle.dump(snapshot_data, f)
 
         # Evaluate metrics.
-        if (snapshot_data is not None) and (len(metrics) > 0):
+        if False:#(snapshot_data is not None) and (len(metrics) > 0):
             if rank == 0:
                 print('Evaluating metrics...')
             for metric in metrics:
