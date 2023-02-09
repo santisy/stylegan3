@@ -169,6 +169,12 @@ def parse_comma_separated_list(s):
 @click.option('--table_size_log2',  help='The log2 size of hash tables.',                       type=int, default=12, show_default=True)
 @click.option('--z_dim',        help='The number of z dimension.',                              type=int, default=256, show_default=True)
 @click.option('--mlp_hidden',   help='The mini mlp hidden dimension.',                          type=int, default=64, show_default=True)
+@click.option('--init_dim',     help='Initial dimension/size of each hash table',               type=int, default=32, show_default=True)
+@click.option('--style_dim',    help='Style dimension of the mapped latent code',               type=int, default=256, show_default=True)
+@click.option('--use_layer_norm',   help='Use layer norm in transformer block.',                  type=bool, default=False, show_default=True)
+@click.option('--modulated_mini_linear', help='If the minilinear is modulated or not',          type=bool, default=True, show_default=True)
+@click.option('--linear_side_up',   help='If the side up is linear or not.',                    type=bool, default=False, show_default=True)
+@click.option('--more_layer_norm',  help='Use layer norm in more linear space.',                type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -203,7 +209,13 @@ def main(**kwargs):
                                  head_dim=opts.head_dim,
                                  table_num=opts.table_num,
                                  table_size_log2=opts.table_size_log2,
-                                 mlp_hidden=opts.mlp_hidden)
+                                 mlp_hidden=opts.mlp_hidden,
+                                 init_dim=opts.init_dim,
+                                 style_dim=opts.style_dim,
+                                 use_layer_norm=opts.use_layer_norm,
+                                 modulated_mini_linear=opts.modulated_mini_linear,
+                                 linear_side_up=opts.linear_side_up,
+                                 more_layer_norm=opts.more_layer_norm)
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
