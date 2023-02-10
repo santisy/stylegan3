@@ -31,8 +31,9 @@ class HashGenerator(nn.Module):
                  style_dim: int=256,
                  use_layer_norm: bool=False,
                  modulated_mini_linear: bool=True,
-                 linear_side_up: bool=False,
                  more_layer_norm: bool=False,
+                 learnable_side_up: bool=False,
+                 fixed_random: bool=True,
                  **kwargs
                  ):
         """
@@ -55,15 +56,17 @@ class HashGenerator(nn.Module):
                     transformer. (default: False)
                 modulated_mini_linear (bool): Modulated mini-linear layer 
                     following the generated hash tables. (default: True)
-                linear_side_up (bool): Is the side up (output-skip) branch
-                    populated by linear or non-parameteric. (default: False)
                 more_layer_norm (bool): More layer normalizations in linear
                     layer. (default: False)
+                learnable_side_up (bool): The side upsample weight is learnbale
+                    or not. (default: False)
+                fixed_random (bool): The fixed weight is randomized or not.
         """
         super().__init__()
         self.res_min = res_min
         self.res_max = res_max
         self.img_size = img_size
+        self.modulated_mini_linear = modulated_mini_linear
 
         # Record for compability
         self.z_dim = z_dim
@@ -92,7 +95,8 @@ class HashGenerator(nn.Module):
                                         init_dim=init_dim,
                                         style_dim=style_dim,
                                         use_layer_norm=use_layer_norm,
-                                        linear_side_up=linear_side_up)
+                                        learnable_side_up=learnable_side_up,
+                                        fixed_random=fixed_random)
 
         #TODO: substitue this to mini-mlp?
         # Mini linear for resolve hash collision
@@ -167,7 +171,10 @@ class HashGenerator(nn.Module):
                                                          self.res_max)
 
         ## Go through small MLPs
-        mlp_out = self.mini_linear(hash_retrieved_feature, s) # B x N x OUT_DIM
+        if self.modulated_mini_linear:
+            mlp_out = self.mini_linear(hash_retrieved_feature, s) # B x N x OUT_DIM
+        else:
+            mlp_out = self.mini_linear(hash_retrieved_feature)
 
         ## Rendering
         out = self._render(mlp_out)

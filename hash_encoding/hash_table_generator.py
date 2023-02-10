@@ -10,6 +10,7 @@ sys.path.insert(0, '.')
 from utils.utils import sinuous_pos_encode
 from utils.dist_utils import dprint
 from hash_encoding.modules import StylelizedTransformerBlock
+from hash_encoding.modules import HashSideUp
 from hash_encoding.layers import ModulatedLinear
 
 class HashTableGenerator(nn.Module):
@@ -22,7 +23,8 @@ class HashTableGenerator(nn.Module):
                  style_dim: int=256,
                  head_dim: int=64,
                  use_layer_norm: bool=False,
-                 linear_side_up: bool=False
+                 learnable_side_up: bool=False,
+                 fixed_random: bool=False
                  ):
         """
             Args:
@@ -36,8 +38,9 @@ class HashTableGenerator(nn.Module):
                     (default: 64)
                 use_layer_norm (bool): Whether to use layer normalization in 
                     transformer. (default: False)
-                linear_side_up (bool): Is the side up (output-skip) branch
-                    populated by linear or non-parameteric. (default: False)
+                learnable_side_up (bool): The side upsample weight is learnbale
+                    or not. (default: False)
+                fixed_random (bool): The fixed weight is randomized or not.
         """
         super(HashTableGenerator, self).__init__()
 
@@ -49,7 +52,8 @@ class HashTableGenerator(nn.Module):
         self.head_dim = head_dim
         self.style_dim = style_dim
         self.use_layer_norm = use_layer_norm
-        self.linear_side_up = linear_side_up
+        self.learnable_side_up = learnable_side_up
+        self.fixed_random = fixed_random
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
 
         b = np.exp((np.log(res_max) - np.log(res_min)) / (table_num - 1))
@@ -86,9 +90,10 @@ class HashTableGenerator(nn.Module):
                         ModulatedLinear(dim_now, dim_now * 2, self.style_dim))
             if i != 0:
                 setattr(self, f'side_up_{i}',
-                        ModulatedLinear(dim_now // 2, dim_now, self.style_dim)
-                        if self.linear_side_up else
-                        lambda x, s: F.interpolate(x, scale_factor=2))
+                        HashSideUp(self.table_num,
+                                   dim_now // 2,
+                                   learnable=self.learnable_side_up,
+                                   fixed_random=self.fixed_random))
 
     def forward(self, s: torch.Tensor) -> torch.Tensor:
         """
@@ -107,12 +112,13 @@ class HashTableGenerator(nn.Module):
             if i == 0:
                 out = x
             else:
-                out = getattr(self, f'side_up_{i}')(out, s) + x
+                out = getattr(self, f'side_up_{i}')(out) + x
             if i != self.levels:
                 x = getattr(self, f'mlp_up_{i}')(x, s)
 
         hash_tables = out.reshape(out.shape[0], out.shape[1],
-                                  out.shape[2] // self.F, self.F)
+                                  out.shape[2] // self.F,
+                                  self.F)
 
         return hash_tables
 
