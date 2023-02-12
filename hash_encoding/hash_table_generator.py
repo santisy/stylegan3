@@ -10,8 +10,10 @@ sys.path.insert(0, '.')
 from utils.utils import sinuous_pos_encode
 from utils.dist_utils import dprint
 from hash_encoding.modules import StylelizedTransformerBlock
-from hash_encoding.modules import HashSideUp
+from hash_encoding.modules import HashUp
+from hash_encoding.modules import HashSideOut
 from hash_encoding.layers import ModulatedLinear
+from torch_utils.ops import upfirdn2d
 
 class HashTableGenerator(nn.Module):
     def __init__(self,
@@ -24,7 +26,9 @@ class HashTableGenerator(nn.Module):
                  head_dim: int=64,
                  use_layer_norm: bool=False,
                  learnable_side_up: bool=False,
-                 fixed_random: bool=False
+                 fixed_random: bool=False,
+                 linear_up: bool=True,
+                 resample_filter=[1,3,3,1]
                  ):
         """
             Args:
@@ -41,6 +45,7 @@ class HashTableGenerator(nn.Module):
                 learnable_side_up (bool): The side upsample weight is learnbale
                     or not. (default: False)
                 fixed_random (bool): The fixed weight is randomized or not.
+                resample_filter (List): Low pass filter
         """
         super(HashTableGenerator, self).__init__()
 
@@ -54,6 +59,8 @@ class HashTableGenerator(nn.Module):
         self.use_layer_norm = use_layer_norm
         self.learnable_side_up = learnable_side_up
         self.fixed_random = fixed_random
+        self.linear_up = linear_up
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
 
         b = np.exp((np.log(res_max) - np.log(res_min)) / (table_num - 1))
@@ -81,19 +88,36 @@ class HashTableGenerator(nn.Module):
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
                                                          nhead_now,
+                                                         self.table_num,
                                                          self.style_dim,
                                                          block_num=2,
-                                                         activation=nn.ReLU)
+                                                         activation=nn.LeakyReLU)
             setattr(self, f'transformer_block_{i}', transform_block)
             if i != L:
                 setattr(self, f'mlp_up_{i}',
-                        ModulatedLinear(dim_now, dim_now * 2, self.style_dim))
-            if i != 0:
-                setattr(self, f'side_up_{i}',
-                        HashSideUp(self.table_num,
-                                   dim_now // 2,
-                                   learnable=self.learnable_side_up,
-                                   fixed_random=self.fixed_random))
+                        HashUp(self.table_num, dim_now,
+                               learnable=self.linear_up,
+                               fixed_random=self.fixed_random,
+                               res_min=self.res_min,
+                               res_max=self.res_max))
+
+            # Output layer
+            setattr(self, f'side_up_{i}',
+                    HashUp(self.table_num,
+                           dim_now // 2,
+                           learnable=self.linear_up,
+                           fixed_random=self.fixed_random,
+                           res_min=self.res_min,
+                           res_max=self.res_max))
+
+    def _sample_coords(self, b, res_now):
+        # 2D sampling case
+        c = torch.arange(res_now) + 0.5
+        x, y = torch.meshgrid(c, c)
+        coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2)
+        coords = coords.repeat(b, 1, 1) / res_now # Normalize it to [0, 1]
+
+        return coords
 
     def forward(self, s: torch.Tensor) -> torch.Tensor:
         """
@@ -114,7 +138,7 @@ class HashTableGenerator(nn.Module):
             else:
                 out = getattr(self, f'side_up_{i}')(out) + x
             if i != self.levels:
-                x = getattr(self, f'mlp_up_{i}')(x, s)
+                x = getattr(self, f'mlp_up_{i}')(x)
 
         hash_tables = out.reshape(out.shape[0], out.shape[1],
                                   out.shape[2] // self.F,

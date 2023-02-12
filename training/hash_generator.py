@@ -32,8 +32,8 @@ class HashGenerator(nn.Module):
                  use_layer_norm: bool=False,
                  modulated_mini_linear: bool=True,
                  more_layer_norm: bool=False,
-                 learnable_side_up: bool=False,
                  fixed_random: bool=True,
+                 linear_up: bool=True,
                  **kwargs
                  ):
         """
@@ -58,9 +58,8 @@ class HashGenerator(nn.Module):
                     following the generated hash tables. (default: True)
                 more_layer_norm (bool): More layer normalizations in linear
                     layer. (default: False)
-                learnable_side_up (bool): The side upsample weight is learnbale
-                    or not. (default: False)
                 fixed_random (bool): The fixed weight is randomized or not.
+                linear_up (bool): If use linear up or not.
         """
         super().__init__()
         self.res_min = res_min
@@ -95,29 +94,28 @@ class HashGenerator(nn.Module):
                                         init_dim=init_dim,
                                         style_dim=style_dim,
                                         use_layer_norm=use_layer_norm,
-                                        learnable_side_up=learnable_side_up,
-                                        fixed_random=fixed_random)
+                                        fixed_random=fixed_random,
+                                        linear_up=linear_up)
 
         #TODO: substitue this to mini-mlp?
         # Mini linear for resolve hash collision
-        if modulated_mini_linear:
-            self.mini_linear = StackedModulatedMLP(table_num * 2,
-                                                mlp_hidden,
-                                                mlp_out_dim,
-                                                style_dim,
-                                                3,
-                                                norm_layer=norm_layer)
-        else:
-            self.mini_linear = nn.Sequential(
-                nn.Linear(table_num * 2, mlp_hidden),
-                nn.LeakyReLU(),
-                norm_layer(mlp_hidden),
-                nn.Linear(mlp_hidden, mlp_hidden),
-                nn.LeakyReLU(),
-                norm_layer(mlp_hidden),
-                nn.Linear(mlp_hidden, mlp_out_dim),
-                nn.Tanh()
-            )
+        self.mini_linear = StackedModulatedMLP(table_num * 2,
+                                            mlp_hidden,
+                                            mlp_out_dim,
+                                            style_dim,
+                                            3,
+                                            norm_layer=norm_layer)
+        #else:
+        #    self.mini_linear = nn.Sequential(
+        #        nn.Linear(table_num * 2, mlp_hidden),
+        #        nn.LeakyReLU(),
+        #        norm_layer(mlp_hidden),
+        #        nn.Linear(mlp_hidden, mlp_hidden),
+        #        nn.LeakyReLU(),
+        #        norm_layer(mlp_hidden),
+        #        nn.Linear(mlp_hidden, mlp_out_dim),
+        #        nn.Tanh()
+        #    )
 
     def _sample_coords(self, b) -> torch.Tensor:
         """
@@ -128,7 +126,7 @@ class HashGenerator(nn.Module):
         c = torch.arange(self.img_size) + 0.5
         x, y = torch.meshgrid(c, c)
         coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2)
-        coords = coords.repeat(b, 1, 1) / self.img_size
+        coords = coords.repeat(b, 1, 1) / self.img_size # Normalize it to [0, 1]
 
         return coords
 
@@ -160,7 +158,7 @@ class HashGenerator(nn.Module):
         hash_tables = self.hash_table_generator(s)
 
 
-        ## Retrieve from hash tables according to coordinates
+        # Retrieve from hash tables according to coordinates
         # The output size of retrieved feature is
         #   B x N x (table_num * F), value range [0, 1]
         coords = self._sample_coords(z.shape[0]).to(hash_tables.dtype
@@ -170,7 +168,7 @@ class HashGenerator(nn.Module):
                                                          self.res_min,
                                                          self.res_max)
 
-        ## Go through small MLPs
+        # Go through small MLPs
         if self.modulated_mini_linear:
             mlp_out = self.mini_linear(hash_retrieved_feature, s) # B x N x OUT_DIM
         else:

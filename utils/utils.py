@@ -1,4 +1,5 @@
 """Some utilities"""
+import os
 
 import torch
 
@@ -28,3 +29,9 @@ def sinuous_pos_encode(table_num: int, token_n: int):
     shift_p = shift_p.unsqueeze(dim=0).unsqueeze(dim=0)
 
     return torch.cos(temp_p + shift_p)
+
+
+def delete_file(file_path: str):
+    # TODO: More to add if we involve HDFS file system
+    # Remove the local path
+    os.remove(file_path)
