@@ -9,92 +9,138 @@ import torch.nn.functional as F
 sys.path.insert(0, '.')
 from utils.utils import sinuous_pos_encode
 from utils.dist_utils import dprint
+from hash_encoding.modules import StylelizedTransformerBlock
+from hash_encoding.modules import HashUp
+from hash_encoding.modules import HashSideOut
+from hash_encoding.layers import ModulatedLinear
 
 class HashTableGenerator(nn.Module):
     def __init__(self,
                  table_num: int,
                  table_size_log2: int,
-                 z_dim: int,
+                 init_dim: int,
                  res_min: int,
                  res_max: int,
-                 head_dim: int=64
+                 style_dim: int=256,
+                 head_dim: int=64,
+                 use_layer_norm: bool=False,
+                 learnable_side_up: bool=False,
+                 fixed_random: bool=False,
+                 linear_up: bool=True,
+                 resample_filter=[1,3,3,1]
                  ):
         """
             Args:
                 table_num (int): how many tables (scales) we want to use.
                 table_size_log2 (int): the final size will be 2 ** table_size_log2
-                z_dim (int): the dimension of the latent vector
+                init_dim (int): initial size of the each token
                 res_max (int): maximum resolution
                 res_min (int): minimum resolution
+                style_dim (int): mapped style code dimension. (default: 256)
                 head_dim (int): head_dim, head dimension for a single unit.
                     (default: 64)
+                use_layer_norm (bool): Whether to use layer normalization in 
+                    transformer. (default: False)
+                learnable_side_up (bool): The side upsample weight is learnbale
+                    or not. (default: False)
+                fixed_random (bool): The fixed weight is randomized or not.
+                resample_filter (List): Low pass filter
         """
         super(HashTableGenerator, self).__init__()
 
         self.table_num = table_num
         self.table_size_log2 = table_size_log2
+        self.init_dim = init_dim
         self.res_max = res_max
         self.res_min = res_min
         self.head_dim = head_dim
-        self.z_dim = z_dim
+        self.style_dim = style_dim
+        self.use_layer_norm = use_layer_norm
+        self.learnable_side_up = learnable_side_up
+        self.fixed_random = fixed_random
+        self.linear_up = linear_up
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
 
         b = np.exp((np.log(res_max) - np.log(res_min)) / (table_num - 1))
         res_list = res_min * b ** torch.arange(table_num)
         res_list = res_list.unsqueeze(dim=0) # 1 x H_N
         dprint(f'Hash table resolution list is {res_list}')
-        self.input_dim = self.z_dim // table_num
-        # The positional encodings' size is 1 x H_N x Z_DIM
+
         self.register_buffer('pos_encoding',
-                             sinuous_pos_encode(table_num,
-                                                self.input_dim))
+                             sinuous_pos_encode(table_num, self.init_dim))
+
         self._build_layers()
 
     def _build_layers(self) -> None:
         """This is where to put layer building."""
         # Upsample levels to go
-        input_dim = self.input_dim
+        input_dim = self.init_dim
         self.levels = L = int(self.table_size_log2 - np.log2(input_dim))
 
         for i in range(L+1):
             dim_now = int(input_dim * 2 ** i)
             head_dim_now = min(dim_now, self.head_dim)
             # The dimension for a single head remains constant
-            nhead_now = dim_now // head_dim_now
+            nhead_now = max(dim_now // head_dim_now, 1)
 
-            encoder_layer = nn.TransformerEncoderLayer(d_model=dim_now,
-                                                       nhead=nhead_now)
             # Every transformer block has 2 transform layers
-            transform_block = nn.TransformerEncoder(encoder_layer, num_layers=2)
+            transform_block = StylelizedTransformerBlock(dim_now,
+                                                         nhead_now,
+                                                         self.table_num,
+                                                         self.style_dim,
+                                                         block_num=1,
+                                                         activation=nn.ReLU)
             setattr(self, f'transformer_block_{i}', transform_block)
             if i != L:
-                setattr(self, f'mlp_up_{i}', nn.Linear(dim_now, dim_now * 2))
+                setattr(self, f'mlp_up_{i}',
+                        HashUp(self.table_num, dim_now,
+                               learnable=self.linear_up,
+                               fixed_random=self.fixed_random,
+                               res_min=self.res_min,
+                               res_max=self.res_max))
 
-    def forward(self, z: torch.Tensor) -> torch.Tensor:
+            # Output layer
+            setattr(self, f'side_up_{i}',
+                    HashUp(self.table_num,
+                           dim_now // 2,
+                           learnable=self.linear_up,
+                           fixed_random=self.fixed_random,
+                           res_min=self.res_min,
+                           res_max=self.res_max))
+
+    def _sample_coords(self, b, res_now):
+        # 2D sampling case
+        c = torch.arange(res_now) + 0.5
+        x, y = torch.meshgrid(c, c)
+        coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2)
+        coords = coords.repeat(b, 1, 1) / res_now # Normalize it to [0, 1]
+
+        return coords
+
+    def forward(self, s: torch.Tensor) -> torch.Tensor:
         """
             Args:
-                z (torch.Tensor): B x Z_DIM
+                s (torch.Tensor): B x S_DIM (The W, the mapped style code)
 
             Return:
                 hash_tables (torch.Tensor): B x H_N x H_S x (F=2)
         """
-        #z = z.unsqueeze(dim=1) # N x 1 x Z_DIM
-        b = z.shape[0]
-        z = z.reshape(b, self.table_num, -1)
+        b = s.shape[0]
 
-        x = tokenized_z = z + self.pos_encoding
+        x = self.pos_encoding.repeat(b, 1, 1)
         # Transformers following
         for i in range(self.levels+1):
-            x = getattr(self, f'transformer_block_{i}')(x)
+            x = getattr(self, f'transformer_block_{i}')(x, s)
             if i == 0:
                 out = x
             else:
-                out = F.interpolate(out, scale_factor=2) + x
+                out = getattr(self, f'side_up_{i}')(out) + x
             if i != self.levels:
                 x = getattr(self, f'mlp_up_{i}')(x)
 
         hash_tables = out.reshape(out.shape[0], out.shape[1],
-                                  out.shape[2] // self.F, self.F)
+                                  out.shape[2] // self.F,
+                                  self.F)
 
         return hash_tables
 
@@ -103,11 +149,12 @@ class HashTableGenerator(nn.Module):
 if __name__ == '__main__':
     h_net = HashTableGenerator(table_num=16,
                                table_size_log2=13,
-                               z_dim=128,
+                               init_dim=16,
                                res_max=512,
                                res_min=16,
+                               style_dim=256,
                                head_dim=64).cuda()
 
-    z = torch.randn(4, 128).cuda()
-    out = h_net(z)
+    s = torch.randn(4, 256).cuda()
+    out = h_net(s)
     print(out.shape)

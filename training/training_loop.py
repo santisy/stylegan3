@@ -27,13 +27,14 @@ from metrics import metric_main
 from torch_utils import misc, training_stats
 from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
 from utils.dist_utils import dprint
+from utils.utils import delete_file
 
 #----------------------------------------------------------------------------
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
     rnd = np.random.RandomState(random_seed)
-    gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
-    gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
+    gw = np.clip(7680 // training_set.image_shape[2], 7, 12)
+    gh = np.clip(4320 // training_set.image_shape[1], 4, 12)
 
     # No labels => show random subset of training samples.
     if not training_set.has_labels:
@@ -250,6 +251,7 @@ def training_loop(
     tick_start_time = time.time()
     maintenance_time = tick_start_time - start_time
     batch_idx = 0
+    save_snapshot_list = []
     if progress_fn is not None:
         progress_fn(0, total_kimg)
     while True:
@@ -378,9 +380,12 @@ def training_loop(
                     snapshot_data[key] = value.cpu()
                 del value # conserve memory
             snapshot_pkl = os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl')
+            save_snapshot_list.append(snapshot_pkl)
             if rank == 0:
                 with open(snapshot_pkl, 'wb') as f:
                     pickle.dump(snapshot_data, f)
+                if len(save_snapshot_list) > 5:
+                    delete_file(save_snapshot_list.pop(0))
 
         # Evaluate metrics.
         if False:#(snapshot_data is not None) and (len(metrics) > 0):

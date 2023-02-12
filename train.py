@@ -156,6 +156,7 @@ def parse_comma_separated_list(s):
 @click.option('--kimg',         help='Total training duration', metavar='KIMG',                 type=click.IntRange(min=1), default=25000, show_default=True)
 @click.option('--tick',         help='How often to print progress', metavar='KIMG',             type=click.IntRange(min=1), default=4, show_default=True)
 @click.option('--snap',         help='How often to save snapshots', metavar='TICKS',            type=click.IntRange(min=1), default=50, show_default=True)
+@click.option('--img_snap',     help='How often to save image snapshots', metavar='TICKS',      type=click.IntRange(min=1), default=50, show_default=True)
 @click.option('--seed',         help='Random seed', metavar='INT',                              type=click.IntRange(min=0), default=0, show_default=True)
 @click.option('--fp32',         help='Disable mixed-precision', metavar='BOOL',                 type=bool, default=False, show_default=True)
 @click.option('--nobench',      help='Disable cuDNN benchmarking', metavar='BOOL',              type=bool, default=False, show_default=True)
@@ -169,6 +170,13 @@ def parse_comma_separated_list(s):
 @click.option('--table_size_log2',  help='The log2 size of hash tables.',                       type=int, default=12, show_default=True)
 @click.option('--z_dim',        help='The number of z dimension.',                              type=int, default=256, show_default=True)
 @click.option('--mlp_hidden',   help='The mini mlp hidden dimension.',                          type=int, default=64, show_default=True)
+@click.option('--init_dim',     help='Initial dimension/size of each hash table',               type=int, default=32, show_default=True)
+@click.option('--style_dim',    help='Style dimension of the mapped latent code',               type=int, default=256, show_default=True)
+@click.option('--use_layer_norm',   help='Use layer norm in transformer block.',                type=bool, default=False, show_default=True)
+@click.option('--modulated_mini_linear', help='If the minilinear is modulated or not',          type=bool, default=True, show_default=True)
+@click.option('--more_layer_norm',  help='Use layer norm in more linear space.',                type=bool, default=False, show_default=True)
+@click.option('--fixed_random',     help='The upsample is fixed but randomized.',               type=bool, default=True,  show_default=True)
+@click.option('--linear_up',    help='The upsample is linear or not.',                          type=bool, default=True, show_default=True)
 
 
 def main(**kwargs):
@@ -203,7 +211,14 @@ def main(**kwargs):
                                  head_dim=opts.head_dim,
                                  table_num=opts.table_num,
                                  table_size_log2=opts.table_size_log2,
-                                 mlp_hidden=opts.mlp_hidden)
+                                 mlp_hidden=opts.mlp_hidden,
+                                 init_dim=opts.init_dim,
+                                 style_dim=opts.style_dim,
+                                 use_layer_norm=opts.use_layer_norm,
+                                 modulated_mini_linear=opts.modulated_mini_linear,
+                                 more_layer_norm=opts.more_layer_norm,
+                                 fixed_random=opts.fixed_random,
+                                 linear_up=opts.linear_up)
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
@@ -231,7 +246,8 @@ def main(**kwargs):
     c.metrics = opts.metrics
     c.total_kimg = opts.kimg
     c.kimg_per_tick = opts.tick
-    c.image_snapshot_ticks = c.network_snapshot_ticks = opts.snap
+    c.network_snapshot_ticks = opts.snap
+    c.image_snapshot_ticks = opts.img_snap
     c.random_seed = c.training_set_kwargs.random_seed = opts.seed
     c.data_loader_kwargs.num_workers = opts.workers
 
