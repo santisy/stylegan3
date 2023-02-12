@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from training.networks_stylegan2 import FullyConnectedLayer
 
 class ModulatedLinear(nn.Module):
     def __init__(self, in_ch, out_ch, s_dim,
@@ -23,7 +24,7 @@ class ModulatedLinear(nn.Module):
         else:
             self.activ = None
 
-        self.s_mapping = nn.Linear(s_dim, in_ch)
+        self.s_mapping = FullyConnectedLayer(s_dim, in_ch)
 
     def forward(self, x, s):
         """

@@ -13,7 +13,6 @@ from hash_encoding.modules import StylelizedTransformerBlock
 from hash_encoding.modules import HashUp
 from hash_encoding.modules import HashSideOut
 from hash_encoding.layers import ModulatedLinear
-from torch_utils.ops import upfirdn2d
 
 class HashTableGenerator(nn.Module):
     def __init__(self,
@@ -60,7 +59,6 @@ class HashTableGenerator(nn.Module):
         self.learnable_side_up = learnable_side_up
         self.fixed_random = fixed_random
         self.linear_up = linear_up
-        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
 
         b = np.exp((np.log(res_max) - np.log(res_min)) / (table_num - 1))
@@ -90,8 +88,8 @@ class HashTableGenerator(nn.Module):
                                                          nhead_now,
                                                          self.table_num,
                                                          self.style_dim,
-                                                         block_num=2,
-                                                         activation=nn.LeakyReLU)
+                                                         block_num=1,
+                                                         activation=nn.ReLU)
             setattr(self, f'transformer_block_{i}', transform_block)
             if i != L:
                 setattr(self, f'mlp_up_{i}',

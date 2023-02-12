@@ -62,7 +62,7 @@ class MultiHeadAttention(nn.Module):
 class StackedModulatedMLP(nn.Module):
     def __init__(self, in_ch: int, h_ch: int, out_ch: int, s_dim: int,
                  n_layers: int,
-                 in_activ=nn.LeakyReLU,
+                 in_activ=nn.ReLU,
                  out_activ=nn.Tanh,
                  norm_layer=nn.Identity):
         """
@@ -134,11 +134,14 @@ class StylelizedTransformerBlock(nn.Module):
                                                     self.head_num,
                                                     self.table_num,
                                                     self.s_dim))
-            self.l_layers.append(ModulatedLinear(self.feat_dim,
-                                                 self.feat_dim,
-                                                 self.s_dim,
-                                                 activation=self.activation,
-                                                 bias=True
+            self.l_layers.append(StackedModulatedMLP(
+                self.feat_dim,
+                self.feat_dim * 2,
+                self.feat_dim,
+                self.s_dim,
+                2,
+                in_activ=self.activation,
+                out_activ=None
             ))
             
 
@@ -186,29 +189,19 @@ class HashUp(nn.Module):
             if fixed_random:
                 self.register_buffer('weight',
                                      nn.init.xavier_uniform_(weight))
-            else:
-                assert res_min is not None and res_max is not None
-                self.register_buffer('weight',
-                                     get_hash_up_mat.get_hash_interp_matrix_2D(
-                                        input_dim,
-                                        table_num,
-                                        res_min,
-                                        res_max,
-                                        2
-                                     ))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
             Args:
                 x: token, size of B x N x C
         """
-        weight = self.weight
         if self.learnable:
+            weight = self.weight
             decoefs = weight.square().sum(dim=[2], keepdim=True).rsqrt()
             w = weight * decoefs
+            x = torch.einsum('bnc,noc->bno', x, w).contiguous()
         else:
-            w = weight
-        x = torch.einsum('bnc,noc->bno', x, w).contiguous()
+            x = torch.cat((x, x), dim=2)
         return x
 
 
