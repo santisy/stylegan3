@@ -8,10 +8,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from torch_utils.ops import upfirdn2d
+from torch_utils.ops import bias_act
+from training.networks_stylegan2 import FullyConnectedLayer
+from training.networks_stylegan2 import modulated_conv2d
+
 from hash_encoding.layers import ModulatedLinear
 from hash_encoding.layers import TokenWiseModulatedLinear
 from hash_retrieve_module import HashTableRetrieve
-from hash_retrieve_module import get_hash_up_mat
+from hash_retrieve_module import HashTableRecon
+from utils.utils import sample_coords
+from utils.utils import render
 
 
 class MultiHeadAttention(nn.Module):
@@ -58,6 +65,91 @@ class MultiHeadAttention(nn.Module):
         return (f'Input dimension {self.feat_dim}; Head number {self.head_num} '
                 f'Style dimension {self.s_dim}')
 
+class HashAttention(nn.Module):
+    def __init__(self, table_num: int, res_min: int, res_max: int,
+                 style_dim: int,
+                 resample_filter=[1,3,3,1]):
+        """
+            Hash Attention: 
+                We first hash to spatial tensor chunk and do attention to this 
+                    chunk and hash back to hash tables.
+            Args:
+                table_num (int): The number of tables (To determine the channel
+                    dimension for convolution layer and style MLP)
+                res_max (int): maximum resolution of hash tables
+                res_min (int): minimum resolution of hash tables
+                style_dim (int): style vector dimension
+                resample_filter (int): The low pass filter. 
+                    (default: [1, 3, 3, 1])
+        """
+        super().__init__()
+        self.res_min = res_min
+        self.res_max = res_max
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+
+        # The `2` here is the entry length in hash tables
+        self.ch = ch = table_num * 2
+
+        self.affine = FullyConnectedLayer(style_dim, ch, bias_init=1)
+
+        # convolution weight and bias
+        weight = torch.nn.Parameter(torch.randn([ch, ch, 3, 3]))
+        bias = torch.nn.Parameter(torch.zeros([ch]))
+        self.register_parameter('weight', weight)
+        self.register_parameter('bias', bias)
+
+        # Attention k, q, v
+        # TODO: What to do with the head num here?
+        self.multi_head_attention = MultiHeadAttention(ch, 1, None, style_dim)
+
+    def forward(self, inputs, s):
+        # The styles
+        s_ = self.affine(s) 
+
+        batch_size = inputs.shape[0]
+        device = inputs.device
+        # The `2` here is the entry length in hash tables
+        table_dim = inputs.shape[2] // 2
+        table_num = inputs.shape[1]
+        hash_tables = inputs.reshape(batch_size, table_num, table_dim, 2)
+
+        # Hash out to image tensor
+        coords = sample_coords(batch_size, self.res_max).to(device)
+        hash_retrieved_feats = HashTableRetrieve.apply(hash_tables,
+                                                       coords,
+                                                       self.res_min,
+                                                       self.res_max)
+        feat_tensor = render(hash_retrieved_feats, self.res_max)
+
+        # The convolution, downsample scale=2
+        feat_tensor = modulated_conv2d(feat_tensor, self.weight, s_, down=2,
+                                       resample_filter=self.resample_filter,
+                                       padding=1)
+        feat_tensor = bias_act.bias_act(feat_tensor,
+                                        self.bias.to(feat_tensor.dtype),
+                                        act='lrelu')
+
+        # Self attention
+        tokenize_tensor = feat_tensor.reshape(batch_size, self.ch, -1)
+        tokenize_tensor = tokenize_tensor.permute(0, 2, 1) # B x N x C
+        tokenize_tensor = F.layer_norm(
+            self.multi_head_attention(tokenize_tensor, s) + tokenize_tensor,
+            [self.ch])
+        
+        # Recon the hash tables
+        feat_tensor = tokenize_tensor.reshape(batch_size,
+                                              self.res_max // 2,
+                                              self.res_max // 2,
+                                              self.ch).permute(
+                                                0, 3, 1, 2 
+                                              ).contiguous()
+        recon_hash_tables = HashTableRecon.apply(feat_tensor,
+                                                 table_dim,
+                                                 self.res_min,
+                                                 self.res_max)
+
+        return F.layer_norm(recon_hash_tables.reshape(batch_size, table_num, -1), [table_dim*2])
+
 
 class StackedModulatedMLP(nn.Module):
     def __init__(self, in_ch: int, h_ch: int, out_ch: int, s_dim: int,
@@ -97,7 +189,13 @@ class StackedModulatedMLP(nn.Module):
 
 
 class StylelizedTransformerBlock(nn.Module):
-    def __init__(self, feat_dim: int, head_num: int, table_num: int, s_dim: int,
+    def __init__(self,
+                 feat_dim: int,
+                 head_num: int,
+                 table_num: int,
+                 s_dim: int,
+                 res_min: int,
+                 res_max: int,
                  block_num: int=1,
                  activation=nn.ReLU,
                  use_layer_norm=True,
@@ -108,6 +206,8 @@ class StylelizedTransformerBlock(nn.Module):
                 head_num: The head number
                 table_num: The table number of the token
                 s_dim: style mapping size
+                res_min (int): minimum resolution
+                res_max (int): maximum resolution
                 block_num: How many multihead attention block will in one
                     Transformer block.
                 activation: activation function. (default: nn.ReLU)
@@ -121,6 +221,8 @@ class StylelizedTransformerBlock(nn.Module):
         self.s_dim = s_dim
         self.block_num = block_num
         self.upsample = upsample
+        self.res_min = res_min
+        self.res_max = res_max
         self.activation = activation
         self.use_layer_norm = use_layer_norm
 
@@ -130,10 +232,12 @@ class StylelizedTransformerBlock(nn.Module):
         self.t_blocks = nn.ModuleList()
         self.l_layers = nn.ModuleList()
         for _ in range(self.block_num):
-            self.t_blocks.append(MultiHeadAttention(self.feat_dim,
-                                                    self.head_num,
-                                                    self.table_num,
-                                                    self.s_dim))
+            self.t_blocks.append(HashAttention(
+                self.table_num,
+                self.res_min,
+                self.res_max,
+                self.s_dim
+            ))
             self.l_layers.append(StackedModulatedMLP(
                 self.feat_dim,
                 self.feat_dim * 2,

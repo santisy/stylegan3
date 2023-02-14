@@ -1,19 +1,20 @@
+"""
+    Hash related operation pytorch interface
+    Author: Dingdong Yang
+    Contacts: dya62@sfu.ca
+"""
 
 import argparse
-import sys
 import time
 from typing import List
 
 import torch
 from torch.utils.cpp_extension import load
 
-__all__ = ['HashTableRetrieve']
-
-sys.path.insert(0, '.')
 
 hash_retrieve = load(name='hash_retrieve',
-                     sources=['hash_retrieve_module/cuda_coord_linear_interp.cpp',
-                              'hash_retrieve_module/cuda_coord_linear_kernel.cu'])
+                        sources=['./hash_retrieve_module/cuda_coord_linear_interp.cpp',
+                                 './hash_retrieve_module/cuda_coord_linear_kernel.cu'])
 
 def CHECK_DIM(name: str, x: torch.Tensor, dim_num: int):
     if x.dim() != dim_num:
@@ -60,7 +61,7 @@ class HashTableRetrieve(torch.autograd.Function):
                                                            res_max)
         ctx.res_min = res_min
         ctx.res_max = res_max
-        ctx.table_size = hash_tables.shape[2]
+        ctx.table_size = hash_tables.size(2)
         ctx.save_for_backward(coords, indices)
         return features
     
@@ -75,6 +76,36 @@ class HashTableRetrieve(torch.autograd.Function):
                                                      ctx.table_size)
         return grad_table, None, None, None
     
+
+class HashTableRecon(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, spatial_feats: torch.Tensor, # B x (H_N x F) x H x W
+                table_dim: int,
+                res_min: int,
+                res_max: int
+                ):
+        CHECK_DIM('spatial_feats', spatial_feats, 4)
+        hash_table, indices = hash_retrieve.recon_forward(spatial_feats,
+                                                          table_dim,
+                                                          res_min,
+                                                          res_max)
+        ctx.res_min = res_min
+        ctx.res_max = res_max
+        ctx.feat_size = spatial_feats.size(2)
+        ctx.save_for_backward(indices)
+
+        return hash_table
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        indices = ctx.saved_tensors[0]
+        grad_feats = hash_retrieve.recon_backward(grad_out.contiguous(),
+                                                  indices,
+                                                  ctx.res_min,
+                                                  ctx.res_max,
+                                                  ctx.feat_size)
+        return grad_feats, None, None, None
 
 
 if __name__ == '__main__':

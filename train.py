@@ -177,6 +177,7 @@ def parse_comma_separated_list(s):
 @click.option('--more_layer_norm',  help='Use layer norm in more linear space.',                type=bool, default=False, show_default=True)
 @click.option('--fixed_random',     help='The upsample is fixed but randomized.',               type=bool, default=True,  show_default=True)
 @click.option('--linear_up',    help='The upsample is linear or not.',                          type=bool, default=True, show_default=True)
+@click.option('--output_skip',  help='Output skip true or not',                                 type=bool, default=True, show_default=True)
 
 
 def main(**kwargs):
@@ -218,7 +219,8 @@ def main(**kwargs):
                                  modulated_mini_linear=opts.modulated_mini_linear,
                                  more_layer_norm=opts.more_layer_norm,
                                  fixed_random=opts.fixed_random,
-                                 linear_up=opts.linear_up)
+                                 linear_up=opts.linear_up,
+                                 output_skip=opts.output_skip)
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
@@ -263,6 +265,12 @@ def main(**kwargs):
 
     # Base configuration.
     c.ema_kimg = c.batch_size * 10 / 32
+
+    # These may help?
+    # Temp not done
+    c.loss_kwargs.blur_init_sigma = 10 # Blur the images seen by the discriminator.
+    c.loss_kwargs.blur_fade_kimg = c.batch_size * 200 / 32 # Fade out the blur during the first N kimg.
+
     #if opts.cfg == 'stylegan2':
     #    c.G_kwargs.class_name = 'training.networks_stylegan2.Generator'
     #    c.loss_kwargs.style_mixing_prob = 0.9 # Enable style mixing regularization.
@@ -278,8 +286,6 @@ def main(**kwargs):
     #        c.G_kwargs.channel_base *= 2 # Double the number of feature maps.
     #        c.G_kwargs.channel_max *= 2
     #        c.G_kwargs.use_radial_filters = True # Use radially symmetric downsampling filters.
-    #        c.loss_kwargs.blur_init_sigma = 10 # Blur the images seen by the discriminator.
-    #        c.loss_kwargs.blur_fade_kimg = c.batch_size * 200 / 32 # Fade out the blur during the first N kimg.
 
     # Augmentation.
     if opts.aug != 'noaug':

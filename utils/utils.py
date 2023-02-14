@@ -35,3 +35,26 @@ def delete_file(file_path: str):
     # TODO: More to add if we involve HDFS file system
     # Remove the local path
     os.remove(file_path)
+
+def sample_coords(b: int, img_size: int):
+    """
+        Args:
+            b (int): batch_size
+            img_size (int): image size
+        Retrun:
+            coords (torch.Tensor): B x N x (2 or 3), value range [0, 1]
+    """
+    # 2D sampling case
+    c = torch.arange(img_size) + 0.5
+    x, y = torch.meshgrid(c, c)
+    coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2)
+    coords = coords.repeat(b, 1, 1) / img_size # Normalize it to [0, 1]
+
+    return coords
+
+def render(x: torch.Tensor, img_size: int):
+
+    return  x.reshape(x.shape[0],
+                        img_size,
+                        img_size,
+                        -1).permute(0, 3, 1, 2)

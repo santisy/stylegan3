@@ -24,7 +24,7 @@ class ModulatedLinear(nn.Module):
         else:
             self.activ = None
 
-        self.s_mapping = FullyConnectedLayer(s_dim, in_ch)
+        self.s_mapping = FullyConnectedLayer(s_dim, in_ch, bias_init=1)
 
     def forward(self, x, s):
         """
