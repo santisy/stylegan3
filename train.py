@@ -268,8 +268,8 @@ def main(**kwargs):
 
     # These may help?
     # Temp not done
-    c.loss_kwargs.blur_init_sigma = 10 # Blur the images seen by the discriminator.
-    c.loss_kwargs.blur_fade_kimg = c.batch_size * 200 / 32 # Fade out the blur during the first N kimg.
+    # c.loss_kwargs.blur_init_sigma = 10 # Blur the images seen by the discriminator.
+    # c.loss_kwargs.blur_fade_kimg = c.batch_size * 200 / 32 # Fade out the blur during the first N kimg.
 
     #if opts.cfg == 'stylegan2':
     #    c.G_kwargs.class_name = 'training.networks_stylegan2.Generator'

@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch_utils.ops import upfirdn2d
 from torch_utils.ops import bias_act
 from training.networks_stylegan2 import FullyConnectedLayer
 from training.networks_stylegan2 import modulated_conv2d
@@ -22,26 +21,71 @@ from utils.utils import render
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, feat_dim: int, head_num: int, table_num: int, s_dim: int):
+    def __init__(self, feat_dim: int, head_num: int, s_dim: int,
+                 hidden_dim: int=None,
+                 out_dim: int=None):
         """
             Args:
                 feat_dim: The token dimension of the input
                 head_num: The head number
-                table_num: The number of table (token number)
                 s_dim: style mapping size
+                hidden_dim: hidden dimension
+                out_dim: out dimension
         """
         super().__init__()
         self.feat_dim = feat_dim
         self.head_num = head_num
-        self.head_dim = feat_dim // head_num
         self.s_dim = s_dim
+        self.hidden_dim = feat_dim if hidden_dim is None else hidden_dim
+        self.out_dim = feat_dim if out_dim is None else out_dim
+        self.head_dim = self.hidden_dim // head_num
 
-        self.k_mapping = ModulatedLinear(feat_dim, feat_dim, s_dim)
-        self.q_mapping = ModulatedLinear(feat_dim, feat_dim, s_dim)
-        self.v_mapping = ModulatedLinear(feat_dim, feat_dim, s_dim)
-        self.o_mapping = ModulatedLinear(feat_dim, feat_dim, s_dim)
+        self.k_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim)
+        self.q_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim)
+        self.v_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim)
+        self.o_mapping = ModulatedLinear(hidden_dim, out_dim, s_dim)
 
-    def forward(self, x, s):
+    def _resize_head_to_batch(self, x: torch.Tensor) -> torch.Tensor:
+        """
+            Args:
+                x (torch.Tensor): B x N x H x C, H is the head number
+        """ 
+        batch_size = x.shape[0]
+        token_size = x.shape[1]
+        head_num = x.shape[2]
+        channel_size = x.shape[3]
+        return x.permute(0, 2, 1, 3).reshape(batch_size * head_num,
+                                             token_size,
+                                             channel_size)
+
+    def _resize_head_back(self, x: torch.Tensor,
+                          batch_size: int,
+                          token_num: int) -> torch.Tensor:
+        """
+            Args:
+                x (torch.Tensor): (B x H) x N x C
+                batch_szie (int): batch size
+                token_num (int): token number
+        """
+        x = x.reshape(batch_size, self.head_num, token_num, -1)
+        x = x.permute(0, 2, 1, 3)
+        x = x.reshape(batch_size, token_num, -1)
+        return x
+
+    def _scaled_dot_product_attention(self,
+                                      q: torch.Tensor,
+                                      k: torch.Tensor,
+                                      v: torch.Tensor) -> torch.Tensor:
+        """
+            Args:
+                q, k, v are all torch.Tensor and shapes of B x N x C
+        """
+        # A is of shape B x N x N
+        A = F.softmax(torch.einsum('bnc,bkc->bnk', q, k) / math.sqrt(self.head_dim), dim=-1)
+        out = torch.einsum('bnk,bkc->bnc', A, v) 
+        return out
+
+    def forward(self, x: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
         """
             Args:
                 x: B x N x FEAT_DIM
@@ -50,13 +94,15 @@ class MultiHeadAttention(nn.Module):
         batch_size = x.shape[0]
         token_num = x.shape[1]
 
-        # B x N x H x D
-        k = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
-        q = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
-        v = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        # (B x H) x N x C
+        k = self._resize_head_to_batch(self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim))
+        q = self._resize_head_to_batch(self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim))
+        v = self._resize_head_to_batch(self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim))
 
-        A = F.softmax(torch.einsum('bnhd,bnjd->bnhj', q, k) / math.sqrt(self.head_dim), dim=-1)
-        out = torch.einsum('bnhj,bnjd->bnhd', A, v).reshape(batch_size, token_num, self.feat_dim)
+        out = self._resize_head_back(self._scaled_dot_product_attention(k, q, v),
+                                     batch_size,
+                                     token_num)
+        
         out = self.o_mapping(out, s)
 
         return out
@@ -85,7 +131,7 @@ class HashAttention(nn.Module):
         super().__init__()
         self.res_min = res_min
         self.res_max = res_max
-        self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
+        self.sample_size = 128
 
         # The `2` here is the entry length in hash tables
         self.ch = ch = table_num * 2
@@ -100,7 +146,9 @@ class HashAttention(nn.Module):
 
         # Attention k, q, v
         # TODO: What to do with the head num here?
-        self.multi_head_attention = MultiHeadAttention(ch, 1, None, style_dim)
+        self.multi_head_attention = MultiHeadAttention(ch, 4, style_dim,
+                                                       hidden_dim=ch * 4,
+                                                       out_dim=ch)
 
     def forward(self, inputs, s):
         # The styles
@@ -114,20 +162,17 @@ class HashAttention(nn.Module):
         hash_tables = inputs.reshape(batch_size, table_num, table_dim, 2)
 
         # Hash out to image tensor
-        coords = sample_coords(batch_size, self.res_max).to(device)
+        coords = sample_coords(batch_size, self.sample_size).to(device)
         hash_retrieved_feats = HashTableRetrieve.apply(hash_tables,
                                                        coords,
                                                        self.res_min,
                                                        self.res_max)
-        feat_tensor = render(hash_retrieved_feats, self.res_max)
+        feat_tensor = render(hash_retrieved_feats, self.sample_size)
 
         # The convolution, downsample scale=2
-        feat_tensor = modulated_conv2d(feat_tensor, self.weight, s_, down=2,
-                                       resample_filter=self.resample_filter,
-                                       padding=1)
+        feat_tensor = modulated_conv2d(feat_tensor, self.weight, s_, padding=1)
         feat_tensor = bias_act.bias_act(feat_tensor,
-                                        self.bias.to(feat_tensor.dtype),
-                                        act='lrelu')
+                                        self.bias.to(feat_tensor.dtype))
 
         # Self attention
         tokenize_tensor = feat_tensor.reshape(batch_size, self.ch, -1)
@@ -138,8 +183,8 @@ class HashAttention(nn.Module):
         
         # Recon the hash tables
         feat_tensor = tokenize_tensor.reshape(batch_size,
-                                              self.res_max // 2,
-                                              self.res_max // 2,
+                                              self.sample_size,
+                                              self.sample_size,
                                               self.ch).permute(
                                                 0, 3, 1, 2 
                                               ).contiguous()
@@ -148,7 +193,8 @@ class HashAttention(nn.Module):
                                                  self.res_min,
                                                  self.res_max)
 
-        return F.layer_norm(recon_hash_tables.reshape(batch_size, table_num, -1), [table_dim*2])
+        # FIXME: The normalizing should be inside Hash Table Recon
+        return recon_hash_tables.reshape(batch_size, table_num, -1)
 
 
 class StackedModulatedMLP(nn.Module):
