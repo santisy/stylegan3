@@ -86,21 +86,22 @@ class HashTableRecon(torch.autograd.Function):
                 res_max: int
                 ):
         CHECK_DIM('spatial_feats', spatial_feats, 4)
-        hash_table, indices = hash_retrieve.recon_forward(spatial_feats,
+        hash_table, weights, indices = hash_retrieve.recon_forward(spatial_feats,
                                                           table_dim,
                                                           res_min,
                                                           res_max)
         ctx.res_min = res_min
         ctx.res_max = res_max
         ctx.feat_size = spatial_feats.size(2)
-        ctx.save_for_backward(indices)
+        ctx.save_for_backward(weights, indices)
 
         return hash_table
 
     @staticmethod
     def backward(ctx, grad_out):
-        indices = ctx.saved_tensors[0]
+        weights, indices = ctx.saved_tensors
         grad_feats = hash_retrieve.recon_backward(grad_out.contiguous(),
+                                                  weights,
                                                   indices,
                                                   ctx.res_min,
                                                   ctx.res_max,

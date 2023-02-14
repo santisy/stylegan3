@@ -37,6 +37,7 @@ torch::Tensor retrieve_from_hash_table_cuda_backward(
 
 torch::Tensor reconstruct_hash_table_2D_cuda_backward(
     torch::Tensor table_grad, // B x H_N x H_S x F
+    torch::Tensor weights, // B x H_N x H_S x F
     torch::Tensor indices, // B x N x H_N x 4
     int res_min,
     int res_max,
@@ -107,6 +108,7 @@ torch::Tensor retrieve_from_hash_backward(
 
 torch::Tensor reconstruct_hash_table_2D_backward(
     torch::Tensor table_grad, // B x H_N x H_S x F
+    torch::Tensor weights, // B x H_N x H_S x F
     torch::Tensor indices, // B x N x H_N x 4
     int res_min,
     int res_max,
@@ -115,6 +117,7 @@ torch::Tensor reconstruct_hash_table_2D_backward(
     CHECK_INPUT(table_grad);
     CHECK_INPUT(indices);
     return reconstruct_hash_table_2D_cuda_backward(table_grad,
+                                                   weights,
                                                    indices,
                                                    res_min,
                                                    res_max,

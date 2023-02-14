@@ -99,6 +99,7 @@ __global__ void reconstruct_hash_table_2D_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> spatial_feats, // B x (H_N x F) x H x W
     const float * resolution_list, // Resolution list
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> hash_tables, // B x H_N x H_SIZE x F
+    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> weights, // B x H_N x H_SIZE x F
     torch::PackedTensorAccessor32<long, 4, torch::RestrictPtrTraits> indices
 ){
     // Thread allocation
@@ -143,18 +144,23 @@ __global__ void reconstruct_hash_table_2D_kernel(
             for (int k = 0; k < F; k++){
                 scalar_t sf_value = spatial_feats[b][j * F + k][c_y_l][c_x_l];
                 scalar_t * addr_now = reinterpret_cast<scalar_t *>(&hash_tables[b][j][query_n][k]);
+                scalar_t * addr_w_now = reinterpret_cast<scalar_t *>(&weights[b][j][query_n][k]);
                 switch (i){
                     case 0:
                         gpuAtomicAdd(addr_now, sf_value * wxy_1);
+                        gpuAtomicAdd(addr_w_now, wxy_1);
                         break;
                     case 1:
                         gpuAtomicAdd(addr_now, sf_value * wy_wxy);
+                        gpuAtomicAdd(addr_w_now, wy_wxy);
                         break;
                     case 2:
                         gpuAtomicAdd(addr_now, sf_value * wx_wxy);
+                        gpuAtomicAdd(addr_w_now, wx_wxy);
                         break;
                     case 3:
                         gpuAtomicAdd(addr_now, sf_value * wxy);
+                        gpuAtomicAdd(addr_w_now, wxy);
                         break;
                 }
             }
@@ -283,6 +289,7 @@ __global__ void retrieve_from_hash_table_2D_backward_kernel(
 template <typename scalar_t, unsigned int F>
 __global__ void reconstruct_hash_table_2D_backward_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> table_grad, // B x H_N x H_S x F
+    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> weights, // B x H_N x H_S x F
     const torch::PackedTensorAccessor32<long, 4, torch::RestrictPtrTraits> indices, // B x N x H_N x 4
     const float * resolution_list, // Resolution list
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> feat_grad // B x (H_N x F) x W x H
@@ -320,19 +327,20 @@ __global__ void reconstruct_hash_table_2D_backward_kernel(
             long index_now = indices[b][n][j][i];
             for (int k = 0; k < F; k++){
                 scalar_t grad_now = table_grad[b][j][index_now][k];
+                scalar_t w_ = weights[b][j][index_now][k] + 1e-7;
                 scalar_t * addr_now = reinterpret_cast<scalar_t *>(&feat_grad[b][j * F + k][c_y_l][c_x_l]);
                 switch (i){
                     case 0:
-                        gpuAtomicAdd(addr_now, grad_now * wxy_1);
+                        gpuAtomicAdd(addr_now, grad_now * wxy_1 / w_);
                         break;
                     case 1:
-                        gpuAtomicAdd(addr_now, grad_now * wy_wxy);
+                        gpuAtomicAdd(addr_now, grad_now * wy_wxy / w_);
                         break;
                     case 2:
-                        gpuAtomicAdd(addr_now, grad_now * wx_wxy);
+                        gpuAtomicAdd(addr_now, grad_now * wx_wxy / w_);
                         break;
                     case 3:
-                        gpuAtomicAdd(addr_now, grad_now * wxy);
+                        gpuAtomicAdd(addr_now, grad_now * wxy / w_);
                         break;
                 }
             }
@@ -522,6 +530,11 @@ std::vector<torch::Tensor> reconstruct_hash_table_cuda_forward(
                                         spatial_feats.dtype()).device(
                                         spatial_feats.device())
                             );
+    auto weights = torch::zeros({b, table_num, table_dim, 2},
+                                     torch::TensorOptions().dtype(
+                                        spatial_feats.dtype()).device(
+                                        spatial_feats.device())
+                            );
     auto indices = torch::zeros({b, n, table_num, static_cast<int>(pow(2, dim))},
                                     torch::TensorOptions().dtype(
                                     torch::kLong).device(
@@ -549,13 +562,17 @@ std::vector<torch::Tensor> reconstruct_hash_table_cuda_forward(
             spatial_feats.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             res_list_device,
             recon_hash_tables.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+            weights.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             indices.packed_accessor32<long, 4, torch::RestrictPtrTraits>()
         );
     }));
 
     cudaFree(res_list_device);
 
-    return {recon_hash_tables, indices};
+    // Normalize by weight
+    recon_hash_tables = recon_hash_tables / (weights + 1e-7);
+
+    return {recon_hash_tables, weights, indices};
 }
 
 
@@ -623,6 +640,7 @@ torch::Tensor retrieve_from_hash_table_cuda_backward(
 
 torch::Tensor reconstruct_hash_table_2D_cuda_backward(
     torch::Tensor table_grad, // B x H_N x H_S x F
+    torch::Tensor weights, // B x H_N x H_S x F
     torch::Tensor indices, // B x N x H_N x 4
     const int res_min,
     const int res_max,
@@ -657,6 +675,7 @@ torch::Tensor reconstruct_hash_table_2D_cuda_backward(
         "reconstruct_hash_table_cuda_backward", ([&] {
         reconstruct_hash_table_2D_backward_kernel<scalar_t, 2><<<blocks_num, threads_num>>>(
             table_grad.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+            weights.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             indices.packed_accessor32<long, 4, torch::RestrictPtrTraits>(),
             res_list_device,
             feat_grad.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()

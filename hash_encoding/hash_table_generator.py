@@ -81,12 +81,15 @@ class HashTableGenerator(nn.Module):
         self.levels = L = int(self.table_size_log2 - np.log2(input_dim))
 
         for i in range(L+1):
+            res_now = self.res_min * 2 ** (i // 2)
             dim_now = int(input_dim * 2 ** i)
-            head_dim_now = min(dim_now, self.head_dim)
-            # The dimension for a single head remains constant
-            nhead_now = max(dim_now // head_dim_now, 1)
+            #head_dim_now = min(dim_now, self.head_dim)
+            ## The dimension for a single head remains constant
+            #nhead_now = max(dim_now // head_dim_now, 1)
 
             block_num = 1
+            sample_size = int(np.clip(res_now, self.res_min, self.res_max / 4))
+            nhead_now = 3
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
                                                          nhead_now,
@@ -94,6 +97,7 @@ class HashTableGenerator(nn.Module):
                                                          self.style_dim,
                                                          self.res_min,
                                                          self.res_max,
+                                                         sample_size=sample_size,
                                                          block_num=block_num,
                                                          activation=nn.ReLU)
             setattr(self, f'transformer_block_{i}', transform_block)

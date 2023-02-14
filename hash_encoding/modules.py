@@ -114,6 +114,8 @@ class MultiHeadAttention(nn.Module):
 class HashAttention(nn.Module):
     def __init__(self, table_num: int, res_min: int, res_max: int,
                  style_dim: int,
+                 sample_size: int,
+                 head_num: int,
                  resample_filter=[1,3,3,1]):
         """
             Hash Attention: 
@@ -131,28 +133,29 @@ class HashAttention(nn.Module):
         super().__init__()
         self.res_min = res_min
         self.res_max = res_max
-        self.sample_size = 128
+        self.sample_size = sample_size
 
         # The `2` here is the entry length in hash tables
         self.ch = ch = table_num * 2
 
-        self.affine = FullyConnectedLayer(style_dim, ch, bias_init=1)
-
-        # convolution weight and bias
-        weight = torch.nn.Parameter(torch.randn([ch, ch, 3, 3]))
-        bias = torch.nn.Parameter(torch.zeros([ch]))
-        self.register_parameter('weight', weight)
-        self.register_parameter('bias', bias)
+        # self.affine = FullyConnectedLayer(style_dim, ch, bias_init=1)
+        # # convolution weight and bias
+        # weight = torch.nn.Parameter(torch.randn([ch, ch, 3, 3]))
+        # bias = torch.nn.Parameter(torch.zeros([ch]))
+        # self.register_parameter('weight', weight)
+        # self.register_parameter('bias', bias)
 
         # Attention k, q, v
         # TODO: What to do with the head num here?
-        self.multi_head_attention = MultiHeadAttention(ch, 4, style_dim,
-                                                       hidden_dim=ch * 4,
+        self.multi_head_attention = MultiHeadAttention(ch,
+                                                       head_num,
+                                                       style_dim,
+                                                       hidden_dim=ch * head_num,
                                                        out_dim=ch)
 
     def forward(self, inputs, s):
         # The styles
-        s_ = self.affine(s) 
+        # s_ = self.affine(s) 
 
         batch_size = inputs.shape[0]
         device = inputs.device
@@ -169,10 +172,10 @@ class HashAttention(nn.Module):
                                                        self.res_max)
         feat_tensor = render(hash_retrieved_feats, self.sample_size)
 
-        # The convolution, downsample scale=2
-        feat_tensor = modulated_conv2d(feat_tensor, self.weight, s_, padding=1)
-        feat_tensor = bias_act.bias_act(feat_tensor,
-                                        self.bias.to(feat_tensor.dtype))
+        ## The convolution
+        #feat_tensor = modulated_conv2d(feat_tensor, self.weight, s_, padding=1)
+        #feat_tensor = bias_act.bias_act(feat_tensor,
+        #                                self.bias.to(feat_tensor.dtype))
 
         # Self attention
         tokenize_tensor = feat_tensor.reshape(batch_size, self.ch, -1)
@@ -244,6 +247,7 @@ class StylelizedTransformerBlock(nn.Module):
                  res_max: int,
                  block_num: int=1,
                  activation=nn.ReLU,
+                 sample_size:int=64,
                  use_layer_norm=True,
                  upsample=False):
         """
@@ -257,6 +261,7 @@ class StylelizedTransformerBlock(nn.Module):
                 block_num: How many multihead attention block will in one
                     Transformer block.
                 activation: activation function. (default: nn.ReLU)
+                sample_size (int): sample size to do spatial attention.
                 use_layer_norm (bool): Whether to use layer normalization in 
                     transformer. (default: False)
         """
@@ -269,6 +274,7 @@ class StylelizedTransformerBlock(nn.Module):
         self.upsample = upsample
         self.res_min = res_min
         self.res_max = res_max
+        self.sample_size = sample_size
         self.activation = activation
         self.use_layer_norm = use_layer_norm
 
@@ -282,7 +288,9 @@ class StylelizedTransformerBlock(nn.Module):
                 self.table_num,
                 self.res_min,
                 self.res_max,
-                self.s_dim
+                self.s_dim,
+                sample_size=self.sample_size,
+                head_num=self.head_num
             ))
             self.l_layers.append(StackedModulatedMLP(
                 self.feat_dim,
