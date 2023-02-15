@@ -1,4 +1,6 @@
 """This is the hash-table generator network based on """
+from typing import List
+
 import numpy as np
 
 import sys
@@ -14,6 +16,8 @@ from hash_encoding.modules import HashUp
 from hash_encoding.modules import HashSideOut
 from hash_encoding.layers import ModulatedLinear
 
+SAMPLE_SIZE = 128
+
 class HashTableGenerator(nn.Module):
     def __init__(self,
                  table_num: int,
@@ -28,7 +32,8 @@ class HashTableGenerator(nn.Module):
                  fixed_random: bool=False,
                  linear_up: bool=True,
                  resample_filter=[1,3,3,1],
-                 output_skip: bool=True
+                 output_skip: bool=True,
+                 no_pointwise_linear: bool=False
                  ):
         """
             Args:
@@ -47,6 +52,7 @@ class HashTableGenerator(nn.Module):
                 fixed_random (bool): The fixed weight is randomized or not.
                 resample_filter (List): Low pass filter
                 output_skip (bool): If use output skip. (default: True)
+                no_pointwise_linear (bool): Do not use any pointwise linear
         """
         super(HashTableGenerator, self).__init__()
 
@@ -62,6 +68,7 @@ class HashTableGenerator(nn.Module):
         self.fixed_random = fixed_random
         self.linear_up = linear_up
         self.output_skip = output_skip
+        self.no_pointwise_linear = no_pointwise_linear
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
 
         b = np.exp((np.log(res_max) - np.log(res_min)) / (table_num - 1))
@@ -74,6 +81,10 @@ class HashTableGenerator(nn.Module):
 
         self._build_layers()
 
+    def _get_block_num(self, dim_now: int) -> List[int]:
+        table_dim = dim_now // 2
+        return int(max(np.log2(table_dim / SAMPLE_SIZE), 1))
+
     def _build_layers(self) -> None:
         """This is where to put layer building."""
         # Upsample levels to go
@@ -81,15 +92,14 @@ class HashTableGenerator(nn.Module):
         self.levels = L = int(self.table_size_log2 - np.log2(input_dim))
 
         for i in range(L+1):
-            res_now = self.res_min * 2 ** (i // 2)
             dim_now = int(input_dim * 2 ** i)
             #head_dim_now = min(dim_now, self.head_dim)
             ## The dimension for a single head remains constant
             #nhead_now = max(dim_now // head_dim_now, 1)
 
-            block_num = 1
-            sample_size = int(np.clip(res_now, self.res_min, self.res_max / 4))
-            nhead_now = 3
+            # Use the dim_now to compute block_num and sample_size
+            block_num = self._get_block_num(dim_now)
+            nhead_now = 4
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
                                                          nhead_now,
@@ -97,8 +107,9 @@ class HashTableGenerator(nn.Module):
                                                          self.style_dim,
                                                          self.res_min,
                                                          self.res_max,
-                                                         sample_size=sample_size,
+                                                         sample_size=SAMPLE_SIZE,
                                                          block_num=block_num,
+                                                         no_pointwise_linear=self.no_pointwise_linear,
                                                          activation=nn.ReLU)
             setattr(self, f'transformer_block_{i}', transform_block)
             if i != L:

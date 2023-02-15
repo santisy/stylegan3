@@ -1,9 +1,10 @@
 import torch
-from hash_encoding.modules import MultiHeadAttention
+from hash_encoding.modules import HashAttention
 
-mha = MultiHeadAttention(64, 4, None, 128, hidden_dim=128, out_dim=64)
-input_var = torch.randn(4, 64, 64)
-style_vector = torch.randn(4, 128)
+ha = HashAttention(table_num=16, res_min=16, res_max=256,
+                   style_dim=256, sample_size=128, head_num=4).cuda()
+input_var = torch.randn(2, 16, 256).cuda()
+s = torch.randn(2, 256).cuda()
 
-out = mha(input_var, style_vector)
+out = ha(input_var, s)
 print(out.shape)

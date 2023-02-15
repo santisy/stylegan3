@@ -36,7 +36,9 @@ def delete_file(file_path: str):
     # Remove the local path
     os.remove(file_path)
 
-def sample_coords(b: int, img_size: int):
+def sample_coords(b: int, img_size: int,
+                  sample_size: int=None,
+                  single_batch: bool=False):
     """
         Args:
             b (int): batch_size
@@ -46,9 +48,16 @@ def sample_coords(b: int, img_size: int):
     """
     # 2D sampling case
     c = torch.arange(img_size) + 0.5
-    x, y = torch.meshgrid(c, c)
-    coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2)
-    coords = coords.repeat(b, 1, 1) / img_size # Normalize it to [0, 1]
+    x, y = torch.meshgrid(c, c, indexing='xy')
+    # Normalize it to [0, 1]
+    coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2) / img_size
+
+    if sample_size is not None:
+        sampled_indices = torch.randperm(coords.shape[1])[:sample_size]
+        coords = coords[:, sampled_indices, :]
+
+    if not single_batch:
+        coords = coords.repeat(b, 1, 1)
 
     return coords
 

@@ -38,6 +38,7 @@ class HashGenerator(nn.Module):
                  linear_up: bool=True,
                  s_avg_beta: float=0.998,
                  output_skip: bool=True,
+                 no_pointwise_linear: bool=False,
                  **kwargs
                  ):
         """
@@ -67,6 +68,7 @@ class HashGenerator(nn.Module):
                 w_avg_beta (float): Decay for tracking moving average of S
                     during training.
                 output_skip (bool): If use output skip. (default: True)
+                no_pointwise_linear (bool): Do not use any pointwise linear
         """
         super().__init__()
         self.res_min = res_min
@@ -104,7 +106,8 @@ class HashGenerator(nn.Module):
                                         use_layer_norm=use_layer_norm,
                                         fixed_random=fixed_random,
                                         linear_up=linear_up,
-                                        output_skip=output_skip)
+                                        output_skip=output_skip,
+                                        no_pointwise_linear=no_pointwise_linear)
 
         #TODO: substitue this to mini-mlp?
         # Mini linear for resolve hash collision

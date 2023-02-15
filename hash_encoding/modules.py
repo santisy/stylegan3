@@ -23,7 +23,8 @@ from utils.utils import render
 class MultiHeadAttention(nn.Module):
     def __init__(self, feat_dim: int, head_num: int, s_dim: int,
                  hidden_dim: int=None,
-                 out_dim: int=None):
+                 out_dim: int=None,
+                 activation=nn.Identity):
         """
             Args:
                 feat_dim: The token dimension of the input
@@ -31,6 +32,7 @@ class MultiHeadAttention(nn.Module):
                 s_dim: style mapping size
                 hidden_dim: hidden dimension
                 out_dim: out dimension
+                activation: possible activation function
         """
         super().__init__()
         self.feat_dim = feat_dim
@@ -42,7 +44,8 @@ class MultiHeadAttention(nn.Module):
 
         self.k_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim)
         self.q_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim)
-        self.v_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim)
+        self.v_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim,
+                                         activation=activation)
         self.o_mapping = ModulatedLinear(hidden_dim, out_dim, s_dim)
 
     def _resize_head_to_batch(self, x: torch.Tensor) -> torch.Tensor:
@@ -111,6 +114,7 @@ class MultiHeadAttention(nn.Module):
         return (f'Input dimension {self.feat_dim}; Head number {self.head_num} '
                 f'Style dimension {self.s_dim}')
 
+
 class HashAttention(nn.Module):
     def __init__(self, table_num: int, res_min: int, res_max: int,
                  style_dim: int,
@@ -127,6 +131,9 @@ class HashAttention(nn.Module):
                 res_max (int): maximum resolution of hash tables
                 res_min (int): minimum resolution of hash tables
                 style_dim (int): style vector dimension
+                sample_size (int): how many sampled points (locations)
+                    under res max
+                head_num (int): head number
                 resample_filter (int): The low pass filter. 
                     (default: [1, 3, 3, 1])
         """
@@ -138,24 +145,20 @@ class HashAttention(nn.Module):
         # The `2` here is the entry length in hash tables
         self.ch = ch = table_num * 2
 
-        # self.affine = FullyConnectedLayer(style_dim, ch, bias_init=1)
-        # # convolution weight and bias
-        # weight = torch.nn.Parameter(torch.randn([ch, ch, 3, 3]))
-        # bias = torch.nn.Parameter(torch.zeros([ch]))
-        # self.register_parameter('weight', weight)
-        # self.register_parameter('bias', bias)
+        # Randomly sample coords here.
+        coords = sample_coords(None, res_max, sample_size=sample_size,
+                               single_batch=True)
+        self.register_buffer('coords', coords)
 
         # Attention k, q, v
-        # TODO: What to do with the head num here?
         self.multi_head_attention = MultiHeadAttention(ch,
                                                        head_num,
                                                        style_dim,
                                                        hidden_dim=ch * head_num,
-                                                       out_dim=ch)
+                                                       out_dim=ch,
+                                                       activation=nn.LeakyReLU)
 
     def forward(self, inputs, s):
-        # The styles
-        # s_ = self.affine(s) 
 
         batch_size = inputs.shape[0]
         device = inputs.device
@@ -163,35 +166,23 @@ class HashAttention(nn.Module):
         table_dim = inputs.shape[2] // 2
         table_num = inputs.shape[1]
         hash_tables = inputs.reshape(batch_size, table_num, table_dim, 2)
+        coords = self.coords.repeat(batch_size, 1, 1)
 
         # Hash out to image tensor
-        coords = sample_coords(batch_size, self.sample_size).to(device)
         hash_retrieved_feats = HashTableRetrieve.apply(hash_tables,
                                                        coords,
                                                        self.res_min,
                                                        self.res_max)
-        feat_tensor = render(hash_retrieved_feats, self.sample_size)
-
-        ## The convolution
-        #feat_tensor = modulated_conv2d(feat_tensor, self.weight, s_, padding=1)
-        #feat_tensor = bias_act.bias_act(feat_tensor,
-        #                                self.bias.to(feat_tensor.dtype))
 
         # Self attention
-        tokenize_tensor = feat_tensor.reshape(batch_size, self.ch, -1)
-        tokenize_tensor = tokenize_tensor.permute(0, 2, 1) # B x N x C
+        tokenize_tensor = hash_retrieved_feats
         tokenize_tensor = F.layer_norm(
             self.multi_head_attention(tokenize_tensor, s) + tokenize_tensor,
             [self.ch])
         
         # Recon the hash tables
-        feat_tensor = tokenize_tensor.reshape(batch_size,
-                                              self.sample_size,
-                                              self.sample_size,
-                                              self.ch).permute(
-                                                0, 3, 1, 2 
-                                              ).contiguous()
-        recon_hash_tables = HashTableRecon.apply(feat_tensor,
+        recon_hash_tables = HashTableRecon.apply(tokenize_tensor,
+                                                 coords,
                                                  table_dim,
                                                  self.res_min,
                                                  self.res_max)
@@ -249,7 +240,8 @@ class StylelizedTransformerBlock(nn.Module):
                  activation=nn.ReLU,
                  sample_size:int=64,
                  use_layer_norm=True,
-                 upsample=False):
+                 upsample=False,
+                 no_pointwise_linear=False):
         """
             Args:
                 feat_dim: The token dimension of the input
@@ -264,6 +256,7 @@ class StylelizedTransformerBlock(nn.Module):
                 sample_size (int): sample size to do spatial attention.
                 use_layer_norm (bool): Whether to use layer normalization in 
                     transformer. (default: False)
+                no_pointwise_linear (bool): Do not use any pointwise linear
         """
         super().__init__()
         self.feat_dim = feat_dim
@@ -277,6 +270,7 @@ class StylelizedTransformerBlock(nn.Module):
         self.sample_size = sample_size
         self.activation = activation
         self.use_layer_norm = use_layer_norm
+        self.no_pointwise_linear = no_pointwise_linear
 
         self._build_blocks()
 
@@ -300,13 +294,14 @@ class StylelizedTransformerBlock(nn.Module):
                 2,
                 in_activ=self.activation,
                 out_activ=None
-            ))
+            ) if not self.no_pointwise_linear else nn.Identity())
             
 
     def forward(self, x, s):
         for t, l in zip(self.t_blocks, self.l_layers):
             x = F.layer_norm(t(x, s) + x, (self.feat_dim,))
-            x = F.layer_norm(l(x, s) + x, (self.feat_dim,))
+            if not self.no_pointwise_linear:
+                x = F.layer_norm(l(x, s) + x, (self.feat_dim,))
         return x
         
     

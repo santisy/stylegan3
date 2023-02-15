@@ -80,33 +80,37 @@ class HashTableRetrieve(torch.autograd.Function):
 class HashTableRecon(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, spatial_feats: torch.Tensor, # B x (H_N x F) x H x W
+    def forward(ctx,
+                feats: torch.Tensor, # B x N x (H_N x F)
+                coords: torch.Tensor, # B x N x 2
                 table_dim: int,
                 res_min: int,
                 res_max: int
                 ):
-        CHECK_DIM('spatial_feats', spatial_feats, 4)
-        hash_table, weights, indices = hash_retrieve.recon_forward(spatial_feats,
+        CHECK_DIM('feats', feats, 3)
+        hash_table, weights, indices = hash_retrieve.recon_forward(feats,
+                                                          coords,
                                                           table_dim,
                                                           res_min,
                                                           res_max)
         ctx.res_min = res_min
         ctx.res_max = res_max
-        ctx.feat_size = spatial_feats.size(2)
-        ctx.save_for_backward(weights, indices)
+        ctx.feat_size = feats.size(1)
+        ctx.save_for_backward(weights, coords, indices)
 
         return hash_table
 
     @staticmethod
     def backward(ctx, grad_out):
-        weights, indices = ctx.saved_tensors
+        weights, coords, indices = ctx.saved_tensors
         grad_feats = hash_retrieve.recon_backward(grad_out.contiguous(),
+                                                  coords,
                                                   weights,
                                                   indices,
                                                   ctx.res_min,
                                                   ctx.res_max,
                                                   ctx.feat_size)
-        return grad_feats, None, None, None
+        return grad_feats, None, None, None, None
 
 
 if __name__ == '__main__':

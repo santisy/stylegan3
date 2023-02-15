@@ -20,7 +20,8 @@ std::vector<torch::Tensor> retrieve_from_hash_table_cuda_forward(
 );
 
 std::vector<torch::Tensor> reconstruct_hash_table_cuda_forward(
-    torch::Tensor spatial_feats, // B x (H_N x F) x H x W
+    torch::Tensor feats, // B x N x (H_N x F)
+    torch::Tensor coords, // B x N x 2
     int table_dim, // T
     int res_min,
     int res_max
@@ -37,6 +38,7 @@ torch::Tensor retrieve_from_hash_table_cuda_backward(
 
 torch::Tensor reconstruct_hash_table_2D_cuda_backward(
     torch::Tensor table_grad, // B x H_N x H_S x F
+    torch::Tensor coords, // B x N x 2
     torch::Tensor weights, // B x H_N x H_S x F
     torch::Tensor indices, // B x N x H_N x 4
     int res_min,
@@ -75,13 +77,16 @@ std::vector<torch::Tensor> retrieve_from_hash_forward(
 }
 
 std::vector<torch::Tensor> reconstruct_hash_table_forward(
-    torch::Tensor spatial_feats, // B x (H_N x F) x H x W
+    torch::Tensor feats, // B x N x (H_N x F)
+    torch::Tensor coords, // B x N x 2
     int table_dim, // T
     int res_min,
     int res_max
 ){
-    CHECK_INPUT(spatial_feats);
-    return reconstruct_hash_table_cuda_forward(spatial_feats,
+    CHECK_INPUT(feats);
+    CHECK_INPUT(coords);
+    return reconstruct_hash_table_cuda_forward(feats,
+                                               coords,
                                                table_dim,
                                                res_min,
                                                res_max);
@@ -108,6 +113,7 @@ torch::Tensor retrieve_from_hash_backward(
 
 torch::Tensor reconstruct_hash_table_2D_backward(
     torch::Tensor table_grad, // B x H_N x H_S x F
+    torch::Tensor coords, // B x N x 2
     torch::Tensor weights, // B x H_N x H_S x F
     torch::Tensor indices, // B x N x H_N x 4
     int res_min,
@@ -117,6 +123,7 @@ torch::Tensor reconstruct_hash_table_2D_backward(
     CHECK_INPUT(table_grad);
     CHECK_INPUT(indices);
     return reconstruct_hash_table_2D_cuda_backward(table_grad,
+                                                   coords,
                                                    weights,
                                                    indices,
                                                    res_min,

@@ -96,7 +96,8 @@ __global__ void retrieve_from_hash_table_2D_kernel(
 
 template <typename scalar_t, unsigned int F>
 __global__ void reconstruct_hash_table_2D_kernel(
-    const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> spatial_feats, // B x (H_N x F) x H x W
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> feats, // B x N x (H_N x F)
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> coords, // B x N x 2
     const float * resolution_list, // Resolution list
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> hash_tables, // B x H_N x H_SIZE x F
     torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> weights, // B x H_N x H_SIZE x F
@@ -109,9 +110,8 @@ __global__ void reconstruct_hash_table_2D_kernel(
     // Size variables
     const long T = hash_tables.size(2); // The 'T' notation is in coincide with the original instant-ngp paper
     const long h_n = hash_tables.size(1);
-    const long sf_size = spatial_feats.size(2); // Spatial feats size
 
-    if (n >= sf_size * sf_size){
+    if (n >= coords.size(1)){
         return;
     }
 
@@ -119,15 +119,10 @@ __global__ void reconstruct_hash_table_2D_kernel(
     const long offsets[4][2] = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
     const long primes[2] = {1, 2654435761};
 
-    long c_x_l = n % sf_size;
-    long c_y_l = n / sf_size;
-    scalar_t c_x_t = static_cast<scalar_t>(c_x_l) / sf_size;
-    scalar_t c_y_t = static_cast<scalar_t>(c_y_l) / sf_size;
-
     // Get the eight value
     for (int j = 0; j < h_n; j++){
-        const scalar_t x = c_x_t * static_cast<scalar_t>(resolution_list[j]);
-        const scalar_t y = c_y_t * static_cast<scalar_t>(resolution_list[j]);
+        const scalar_t x = coords[b][n][0] * static_cast<scalar_t>(resolution_list[j]);
+        const scalar_t y = coords[b][n][1] * static_cast<scalar_t>(resolution_list[j]);
         long x_f = floor(x);
         long y_f = floor(y);
         const scalar_t wx = x - x_f;
@@ -142,24 +137,24 @@ __global__ void reconstruct_hash_table_2D_kernel(
                                  ((y_f + offsets[i][1]) * primes[1])) % T;
             indices[b][n][j][i] = query_n;
             for (int k = 0; k < F; k++){
-                scalar_t sf_value = spatial_feats[b][j * F + k][c_y_l][c_x_l];
+                scalar_t f_value = feats[b][n][j * F + k];
                 scalar_t * addr_now = reinterpret_cast<scalar_t *>(&hash_tables[b][j][query_n][k]);
                 scalar_t * addr_w_now = reinterpret_cast<scalar_t *>(&weights[b][j][query_n][k]);
                 switch (i){
                     case 0:
-                        gpuAtomicAdd(addr_now, sf_value * wxy_1);
+                        gpuAtomicAdd(addr_now, f_value * wxy_1);
                         gpuAtomicAdd(addr_w_now, wxy_1);
                         break;
                     case 1:
-                        gpuAtomicAdd(addr_now, sf_value * wy_wxy);
+                        gpuAtomicAdd(addr_now, f_value * wy_wxy);
                         gpuAtomicAdd(addr_w_now, wy_wxy);
                         break;
                     case 2:
-                        gpuAtomicAdd(addr_now, sf_value * wx_wxy);
+                        gpuAtomicAdd(addr_now, f_value * wx_wxy);
                         gpuAtomicAdd(addr_w_now, wx_wxy);
                         break;
                     case 3:
-                        gpuAtomicAdd(addr_now, sf_value * wxy);
+                        gpuAtomicAdd(addr_now, f_value * wxy);
                         gpuAtomicAdd(addr_w_now, wxy);
                         break;
                 }
@@ -289,10 +284,11 @@ __global__ void retrieve_from_hash_table_2D_backward_kernel(
 template <typename scalar_t, unsigned int F>
 __global__ void reconstruct_hash_table_2D_backward_kernel(
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> table_grad, // B x H_N x H_S x F
+    const torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> coords, // B x N x 2
     const torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> weights, // B x H_N x H_S x F
     const torch::PackedTensorAccessor32<long, 4, torch::RestrictPtrTraits> indices, // B x N x H_N x 4
     const float * resolution_list, // Resolution list
-    torch::PackedTensorAccessor32<scalar_t, 4, torch::RestrictPtrTraits> feat_grad // B x (H_N x F) x W x H
+    torch::PackedTensorAccessor32<scalar_t, 3, torch::RestrictPtrTraits> feat_grad // B x N x (H_N x 2)
 ){
     // Thread allocation
     const long b = blockIdx.y; // Batch size 
@@ -300,20 +296,14 @@ __global__ void reconstruct_hash_table_2D_backward_kernel(
 
     // Size variables
     const long h_n = indices.size(2);
-    const long sf_size = feat_grad.size(2);
 
-    if (n >= sf_size * sf_size){
+    if (n >= coords.size(1)){
         return;
     }
 
-    long c_x_l = n % sf_size;
-    long c_y_l = n / sf_size;
-    scalar_t c_x_t = static_cast<scalar_t>(c_x_l) / sf_size;
-    scalar_t c_y_t = static_cast<scalar_t>(c_y_l) / sf_size;
-
     for (int j = 0; j < h_n; j++){
-        const scalar_t x = c_x_t * static_cast<scalar_t>(resolution_list[j]);
-        const scalar_t y = c_y_t * static_cast<scalar_t>(resolution_list[j]);
+        const scalar_t x = coords[b][n][0] * static_cast<scalar_t>(resolution_list[j]);
+        const scalar_t y = coords[b][n][1] * static_cast<scalar_t>(resolution_list[j]);
         long x_f = floor(x);
         long y_f = floor(y);
         const scalar_t wx = x - x_f;
@@ -328,7 +318,7 @@ __global__ void reconstruct_hash_table_2D_backward_kernel(
             for (int k = 0; k < F; k++){
                 scalar_t grad_now = table_grad[b][j][index_now][k];
                 scalar_t w_ = weights[b][j][index_now][k] + 1e-7;
-                scalar_t * addr_now = reinterpret_cast<scalar_t *>(&feat_grad[b][j * F + k][c_y_l][c_x_l]);
+                scalar_t * addr_now = reinterpret_cast<scalar_t *>(&feat_grad[b][n][j * F + k]);
                 switch (i){
                     case 0:
                         gpuAtomicAdd(addr_now, grad_now * wxy_1 / w_);
@@ -514,31 +504,32 @@ std::vector<torch::Tensor> retrieve_from_hash_table_cuda_forward(
 }
 
 std::vector<torch::Tensor> reconstruct_hash_table_cuda_forward(
-    torch::Tensor spatial_feats, // B x (H_N x F) x H x W
+    torch::Tensor feats, // B x N x (H_N x F)
+    torch::Tensor coords, // B x N x (H_N x F)
     const int table_dim,
     const int res_min,
     const int res_max
 ){
-    const int b = spatial_feats.size(0);
+    const int b = feats.size(0);
     const int f = 2; // Only support entry dimension 2
-    const int n = spatial_feats.size(2) * spatial_feats.size(3);
-    const int table_num = spatial_feats.size(1) / f;
+    const int n = feats.size(1);
+    const int table_num = feats.size(2) / f;
     const int dim = 2; // Now only support 2D
 
     auto recon_hash_tables = torch::zeros({b, table_num, table_dim, 2},
                                      torch::TensorOptions().dtype(
-                                        spatial_feats.dtype()).device(
-                                        spatial_feats.device())
+                                        feats.dtype()).device(
+                                        feats.device())
                             );
     auto weights = torch::zeros({b, table_num, table_dim, 2},
                                      torch::TensorOptions().dtype(
-                                        spatial_feats.dtype()).device(
-                                        spatial_feats.device())
+                                        feats.dtype()).device(
+                                        feats.device())
                             );
     auto indices = torch::zeros({b, n, table_num, static_cast<int>(pow(2, dim))},
                                     torch::TensorOptions().dtype(
                                     torch::kLong).device(
-                                    spatial_feats.device())
+                                    feats.device())
                                 );
 
     const int threads_num = 1024;
@@ -556,10 +547,11 @@ std::vector<torch::Tensor> reconstruct_hash_table_cuda_forward(
               cudaMemcpyHostToDevice);
 
     // run the kernels
-    AT_DISPATCH_FLOATING_TYPES_AND_HALF(spatial_feats.type(),
+    AT_DISPATCH_FLOATING_TYPES_AND_HALF(feats.type(),
         "reconstruct_hash_table_cuda_forward", ([&] {
         reconstruct_hash_table_2D_kernel<scalar_t, 2><<<blocks_num, threads_num>>>(
-            spatial_feats.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+            feats.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
+            coords.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
             res_list_device,
             recon_hash_tables.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             weights.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
@@ -640,6 +632,7 @@ torch::Tensor retrieve_from_hash_table_cuda_backward(
 
 torch::Tensor reconstruct_hash_table_2D_cuda_backward(
     torch::Tensor table_grad, // B x H_N x H_S x F
+    torch::Tensor coords, // B x N x 2
     torch::Tensor weights, // B x H_N x H_S x F
     torch::Tensor indices, // B x N x H_N x 4
     const int res_min,
@@ -647,11 +640,11 @@ torch::Tensor reconstruct_hash_table_2D_cuda_backward(
     const int feat_size
 ){
     const int b = table_grad.size(0);
-    const int n = feat_size * feat_size;
+    const int n = feat_size;
     const int dim = 2;
     const int table_num = indices.size(2);
 
-    auto feat_grad = torch::zeros({b, table_num * 2, feat_size, feat_size},
+    auto feat_grad = torch::zeros({b, feat_size, table_num * 2},
                                     torch::TensorOptions().dtype(
                                         table_grad.dtype()).device(
                                         table_grad.device())
@@ -675,10 +668,11 @@ torch::Tensor reconstruct_hash_table_2D_cuda_backward(
         "reconstruct_hash_table_cuda_backward", ([&] {
         reconstruct_hash_table_2D_backward_kernel<scalar_t, 2><<<blocks_num, threads_num>>>(
             table_grad.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
+            coords.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>(),
             weights.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>(),
             indices.packed_accessor32<long, 4, torch::RestrictPtrTraits>(),
             res_list_device,
-            feat_grad.packed_accessor32<scalar_t, 4, torch::RestrictPtrTraits>()
+            feat_grad.packed_accessor32<scalar_t, 3, torch::RestrictPtrTraits>()
         );
     }
     ));
