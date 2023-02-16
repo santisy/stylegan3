@@ -16,7 +16,7 @@ from hash_encoding.modules import HashUp
 from hash_encoding.modules import HashSideOut
 from hash_encoding.layers import ModulatedLinear
 
-SAMPLE_SIZE = 128
+SAMPLE_SIZE = 256
 
 class HashTableGenerator(nn.Module):
     def __init__(self,
@@ -83,22 +83,23 @@ class HashTableGenerator(nn.Module):
 
     def _get_block_num(self, dim_now: int) -> List[int]:
         table_dim = dim_now // 2
+        #return int(np.clip(np.log2(table_dim / SAMPLE_SIZE), 1, 3))
         return int(max(np.log2(table_dim / SAMPLE_SIZE), 1))
 
     def _build_layers(self) -> None:
         """This is where to put layer building."""
         # Upsample levels to go
         input_dim = self.init_dim
-        self.levels = L = int(self.table_size_log2 - np.log2(input_dim))
+        self.levels = L = 7#int(self.table_size_log2 - np.log2(input_dim))
 
         for i in range(L+1):
-            dim_now = int(input_dim * 2 ** i)
+            dim_now = input_dim#int(input_dim * 2 ** i)
             #head_dim_now = min(dim_now, self.head_dim)
             ## The dimension for a single head remains constant
             #nhead_now = max(dim_now // head_dim_now, 1)
 
             # Use the dim_now to compute block_num and sample_size
-            block_num = self._get_block_num(dim_now)
+            block_num = 1 #self._get_block_num(dim_now)
             nhead_now = 4
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
@@ -112,22 +113,22 @@ class HashTableGenerator(nn.Module):
                                                          no_pointwise_linear=self.no_pointwise_linear,
                                                          activation=nn.ReLU)
             setattr(self, f'transformer_block_{i}', transform_block)
-            if i != L:
-                setattr(self, f'mlp_up_{i}',
-                        HashUp(self.table_num, dim_now,
-                               learnable=self.linear_up,
-                               fixed_random=self.fixed_random,
-                               res_min=self.res_min,
-                               res_max=self.res_max))
-            if self.output_skip:
-                # Output layer
-                setattr(self, f'side_up_{i}',
-                        HashUp(self.table_num,
-                            dim_now // 2,
-                            learnable=self.linear_up,
-                            fixed_random=self.fixed_random,
-                            res_min=self.res_min,
-                            res_max=self.res_max))
+            #if i != L:
+            #    setattr(self, f'mlp_up_{i}',
+            #            HashUp(self.table_num, dim_now,
+            #                   learnable=self.linear_up,
+            #                   fixed_random=self.fixed_random,
+            #                   res_min=self.res_min,
+            #                   res_max=self.res_max))
+            #if self.output_skip:
+            #    # Output layer
+            #    setattr(self, f'side_up_{i}',
+            #            HashUp(self.table_num,
+            #                dim_now // 2,
+            #                learnable=self.linear_up,
+            #                fixed_random=self.fixed_random,
+            #                res_min=self.res_min,
+            #                res_max=self.res_max))
 
     def _sample_coords(self, b, res_now):
         # 2D sampling case
@@ -153,13 +154,13 @@ class HashTableGenerator(nn.Module):
         # Transformers following
         for i in range(self.levels+1):
             x = getattr(self, f'transformer_block_{i}')(x, next(s_iter))
-            if self.output_skip:
-                if i == 0:
-                    out = x
-                else:
-                    out = getattr(self, f'side_up_{i}')(out) + x
-            if i != self.levels:
-                x = getattr(self, f'mlp_up_{i}')(x)
+            #if self.output_skip:
+            #    if i == 0:
+            #        out = x
+            #    else:
+            #        out = getattr(self, f'side_up_{i}')(out) + x
+            #if i != self.levels:
+            #    x = getattr(self, f'mlp_up_{i}')(x)
 
         if not self.output_skip:
             out = x

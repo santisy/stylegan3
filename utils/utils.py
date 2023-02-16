@@ -1,6 +1,7 @@
 """Some utilities"""
 import os
 
+import numpy as np
 import torch
 
 __all__ = ['sinuous_pos_encode']
@@ -49,12 +50,21 @@ def sample_coords(b: int, img_size: int,
     # 2D sampling case
     c = torch.arange(img_size) + 0.5
     x, y = torch.meshgrid(c, c, indexing='xy')
-    # Normalize it to [0, 1]
-    coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2) / img_size
+    # Normalize it to [0, 1], shape: img_size x img_size x 2
+    coords = torch.stack((x, y), dim=-1) / img_size
 
     if sample_size is not None:
-        sampled_indices = torch.randperm(coords.shape[1])[:sample_size]
-        coords = coords[:, sampled_indices, :]
+        # Random sample is not totally random, we are trying to sample within
+        #   grids
+        k = int(np.sqrt(sample_size))
+        h = img_size // k
+        chunk_size = int(h * h)
+        c_ = coords.reshape(h, k, h, k, 2)
+        c_ = c_.permute(1, 3, 0, 2, 4).reshape(sample_size, chunk_size, 2)
+        sampled_indices = torch.randperm(chunk_size)[:sample_size]
+        coords = coords[torch.arange(sample_size), sampled_indices, :]
+
+    coords = coords.reshape(1, -1, 2)
 
     if not single_batch:
         coords = coords.repeat(b, 1, 1)

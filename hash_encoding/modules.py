@@ -4,6 +4,7 @@ Modules for generating hash tables
 import math
 from typing import List
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -146,9 +147,24 @@ class HashAttention(nn.Module):
         self.ch = ch = table_num * 2
 
         # Randomly sample coords here.
-        coords = sample_coords(None, res_max, sample_size=sample_size,
+        coords = sample_coords(None, res_max,
+                               sample_size=sample_size,
                                single_batch=True)
-        self.register_buffer('coords', coords)
+        self.register_buffer('r_coords', coords) # Random coords
+        coords = sample_coords(None, res_max, single_batch=True)
+        self.register_buffer('c_coords', coords)
+
+        # Convolutional weights and affines
+        weight1 = torch.nn.Parameter(torch.randn(ch * 2, ch, 3, 3))
+        bias1 = torch.nn.Parameter(torch.randn(ch * 2))
+        weight2 = torch.nn.Parameter(torch.randn(ch, ch * 2, 3, 3))
+        bias2 = torch.nn.Parameter(torch.randn(ch))
+        self.register_parameter('weight1', weight1)
+        self.register_parameter('bias1', bias1)
+        self.register_parameter('weight2', weight2)
+        self.register_parameter('bias2', bias2)
+        self.affine1 = FullyConnectedLayer(style_dim, ch, bias_init=1)
+        self.affine2 = FullyConnectedLayer(style_dim, ch * 2, bias_init=1)
 
         # Attention k, q, v
         self.multi_head_attention = MultiHeadAttention(ch,
@@ -166,29 +182,57 @@ class HashAttention(nn.Module):
         table_dim = inputs.shape[2] // 2
         table_num = inputs.shape[1]
         hash_tables = inputs.reshape(batch_size, table_num, table_dim, 2)
-        coords = self.coords.repeat(batch_size, 1, 1)
+        r_coords = self.r_coords.repeat(batch_size, 1, 1)
+        c_coords = self.c_coords.repeat(batch_size, 1, 1)
 
         # Hash out to image tensor
-        hash_retrieved_feats = HashTableRetrieve.apply(hash_tables,
-                                                       coords,
-                                                       self.res_min,
-                                                       self.res_max)
+        tokenize_tensor = HashTableRetrieve.apply(hash_tables,
+                                                  r_coords,
+                                                  self.res_min,
+                                                  self.res_max)
+        dense_tensor = HashTableRetrieve.apply(hash_tables,
+                                               c_coords,
+                                               self.res_min,
+                                               self.res_max)
+
+        # Dense core                                                
+        dense_tensor = dense_tensor.reshape(batch_size,
+                                            self.res_max,
+                                            self.res_max,
+                                            -1)
+        dt = dt_ori = dense_tensor.permute(0, 3, 1, 2)
+        dt = modulated_conv2d(x=dt, weight=self.weight1,
+                              styles=self.affine1(s),
+                              down=2, padding=1, fused_modconv=True)
+        dt = bias_act.bias_act(dt, self.bias1, act='lrelu')
+        dt = modulated_conv2d(x=dt, weight=self.weight2,
+                              styles=self.affine2(s),
+                              up=2, padding=1, fused_modconv=True)
+        dt = bias_act.bias_act(dt, self.bias2, act='linear')
+        dt = dt + dt_ori
+        dt = dt.reshape(batch_size, -1, self.res_max * self.res_max)
+        dt = F.layer_norm(dt.permute(0, 2, 1).contiguous(), [self.ch])
 
         # Self attention
-        tokenize_tensor = hash_retrieved_feats
         tokenize_tensor = F.layer_norm(
             self.multi_head_attention(tokenize_tensor, s) + tokenize_tensor,
             [self.ch])
         
         # Recon the hash tables
         recon_hash_tables = HashTableRecon.apply(tokenize_tensor,
-                                                 coords,
+                                                 r_coords,
                                                  table_dim,
                                                  self.res_min,
                                                  self.res_max)
+        recon_hash_tables_c = HashTableRecon.apply(dt,
+                                                   c_coords,
+                                                   table_dim,
+                                                   self.res_min,
+                                                   self.res_max)
 
-        # FIXME: The normalizing should be inside Hash Table Recon
-        return recon_hash_tables.reshape(batch_size, table_num, -1)
+        out = recon_hash_tables + recon_hash_tables_c
+
+        return out.reshape(batch_size, table_num, -1)
 
 
 class StackedModulatedMLP(nn.Module):
@@ -286,13 +330,18 @@ class StylelizedTransformerBlock(nn.Module):
                 sample_size=self.sample_size,
                 head_num=self.head_num
             ))
-            self.l_layers.append(TokenWiseModulatedLinear(
-                self.feat_dim,
-                self.feat_dim,
-                self.table_num,
-                self.s_dim,
-                activation=self.activation
-            ) if not self.no_pointwise_linear else nn.Identity())
+            #self.l_layers.append(TokenWiseModulatedLinear(
+            #    self.feat_dim,
+            #    self.feat_dim,
+            #    self.table_num,
+            #    self.s_dim,
+            #    activation=self.activation
+            #) if not self.no_pointwise_linear else nn.Identity())
+            self.l_layers.append(ModulatedLinear(self.feat_dim,
+                                                 self.feat_dim,
+                                                 self.s_dim,
+                                                 activation=nn.LeakyReLU,
+                                                 bias=True))
             
 
     def forward(self, x, s):
