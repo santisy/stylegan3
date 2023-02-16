@@ -286,14 +286,12 @@ class StylelizedTransformerBlock(nn.Module):
                 sample_size=self.sample_size,
                 head_num=self.head_num
             ))
-            self.l_layers.append(StackedModulatedMLP(
+            self.l_layers.append(TokenWiseModulatedLinear(
                 self.feat_dim,
-                self.feat_dim * 2,
                 self.feat_dim,
+                self.table_num,
                 self.s_dim,
-                2,
-                in_activ=self.activation,
-                out_activ=None
+                activation=self.activation
             ) if not self.no_pointwise_linear else nn.Identity())
             
 

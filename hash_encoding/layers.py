@@ -54,12 +54,15 @@ class TokenWiseModulatedLinear(nn.Module):
                  bias=True):
         """
             Args:
-                in_ch: input channel 
+                in_ch: input channel (has not been divided 2)
                 out_ch: output channel
                 table_num: table number (token number)
                 s_dim: style dimension
+
+            ..note.: This espacially for the computation of hash table.
         """
         super().__init__()
+
         weight = nn.Parameter(torch.randn(table_num, out_ch, in_ch))
         self.register_parameter('weight', weight)
         nn.init.xavier_normal_(self.weight)
@@ -75,10 +78,12 @@ class TokenWiseModulatedLinear(nn.Module):
         else:
             self.activ = None
 
-        self.s_mapping = nn.Linear(s_dim, table_num)
+        self.s_mapping = FullyConnectedLayer(s_dim, table_num, bias_init=1)
 
     def forward(self, x, s):
         batch_size = x.shape[0]
+        table_num = x.shape[1]
+
         s = self.s_mapping(s)
 
         weight = self.weight  # table_num x O x I
