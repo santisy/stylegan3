@@ -33,7 +33,6 @@ class HashTableGenerator(nn.Module):
                  linear_up: bool=True,
                  resample_filter=[1,3,3,1],
                  output_skip: bool=True,
-                 no_pointwise_linear: bool=False
                  ):
         """
             Args:
@@ -52,7 +51,6 @@ class HashTableGenerator(nn.Module):
                 fixed_random (bool): The fixed weight is randomized or not.
                 resample_filter (List): Low pass filter
                 output_skip (bool): If use output skip. (default: True)
-                no_pointwise_linear (bool): Do not use any pointwise linear
         """
         super(HashTableGenerator, self).__init__()
 
@@ -68,7 +66,6 @@ class HashTableGenerator(nn.Module):
         self.fixed_random = fixed_random
         self.linear_up = linear_up
         self.output_skip = output_skip
-        self.no_pointwise_linear = no_pointwise_linear
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
 
         b = np.exp((np.log(res_max) - np.log(res_min)) / (table_num - 1))
@@ -93,13 +90,12 @@ class HashTableGenerator(nn.Module):
 
         for i in range(L+1):
             dim_now = int(input_dim * 2 ** i)
-            #head_dim_now = min(dim_now, self.head_dim)
-            ## The dimension for a single head remains constant
-            #nhead_now = max(dim_now // head_dim_now, 1)
-
+            head_dim_now = min(dim_now, self.head_dim)
+            # The dimension for a single head remains constant
+            nhead_now = max(dim_now // head_dim_now, 1)
             # Use the dim_now to compute block_num and sample_size
-            block_num = self._get_block_num(dim_now)
-            nhead_now = 4
+            block_num = 2
+
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
                                                          nhead_now,
@@ -109,7 +105,6 @@ class HashTableGenerator(nn.Module):
                                                          self.res_max,
                                                          sample_size=SAMPLE_SIZE,
                                                          block_num=block_num,
-                                                         no_pointwise_linear=self.no_pointwise_linear,
                                                          activation=nn.ReLU)
             setattr(self, f'transformer_block_{i}', transform_block)
             if i != L:

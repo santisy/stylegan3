@@ -178,7 +178,6 @@ def parse_comma_separated_list(s):
 @click.option('--fixed_random',     help='The upsample is fixed but randomized.',               type=bool, default=True,  show_default=True)
 @click.option('--linear_up',    help='The upsample is linear or not.',                          type=bool, default=True, show_default=True)
 @click.option('--output_skip',  help='Output skip true or not',                                 type=bool, default=True, show_default=True)
-@click.option('--no_pointwise_linear', help='No pointwise linear.',                             type=bool, default=False, show_default=True)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -221,7 +220,7 @@ def main(**kwargs):
                                  fixed_random=opts.fixed_random,
                                  linear_up=opts.linear_up,
                                  output_skip=opts.output_skip,
-                                 no_pointwise_linear=opts.no_pointwise_linear)
+                                 )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)

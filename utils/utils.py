@@ -61,6 +61,20 @@ def sample_coords(b: int, img_size: int,
 
     return coords
 
+def get_shuffle_table_indices(table_num: int, table_dim: int) -> torch.Tensor:
+    """
+        Args:
+            table_num (int): number of tables
+            table_dim (int): table dimension
+        Returns:
+            indices (torch.Tensor): Shuffle indices
+    """
+    indices_collect = []
+    for _ in range(table_num):
+        indices_collect.append(torch.randperm(table_dim))
+    return torch.stack(indices_collect, dim=0)
+
+
 def render(x: torch.Tensor, img_size: int):
 
     return  x.reshape(x.shape[0],

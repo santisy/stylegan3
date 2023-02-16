@@ -2,7 +2,6 @@
 Modules for generating hash tables
 """
 import math
-from typing import List
 
 import torch
 import torch.nn as nn
@@ -16,8 +15,9 @@ from hash_encoding.layers import ModulatedLinear
 from hash_encoding.layers import TokenWiseModulatedLinear
 from hash_retrieve_module import HashTableRetrieve
 from hash_retrieve_module import HashTableRecon
-from utils.utils import sample_coords
+from utils.utils import get_shuffle_table_indices
 from utils.utils import render
+from utils.utils import sample_coords
 
 
 class MultiHeadAttention(nn.Module):
@@ -42,11 +42,11 @@ class MultiHeadAttention(nn.Module):
         self.out_dim = feat_dim if out_dim is None else out_dim
         self.head_dim = self.hidden_dim // head_num
 
-        self.k_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim)
-        self.q_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim)
-        self.v_mapping = ModulatedLinear(feat_dim, hidden_dim, s_dim,
+        self.k_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
+        self.q_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
+        self.v_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim,
                                          activation=activation)
-        self.o_mapping = ModulatedLinear(hidden_dim, out_dim, s_dim)
+        self.o_mapping = ModulatedLinear(self.hidden_dim, self.out_dim, s_dim)
 
     def _resize_head_to_batch(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -241,7 +241,7 @@ class StylelizedTransformerBlock(nn.Module):
                  sample_size:int=64,
                  use_layer_norm=True,
                  upsample=False,
-                 no_pointwise_linear=False):
+                 ):
         """
             Args:
                 feat_dim: The token dimension of the input
@@ -256,7 +256,6 @@ class StylelizedTransformerBlock(nn.Module):
                 sample_size (int): sample size to do spatial attention.
                 use_layer_norm (bool): Whether to use layer normalization in 
                     transformer. (default: False)
-                no_pointwise_linear (bool): Do not use any pointwise linear
         """
         super().__init__()
         self.feat_dim = feat_dim
@@ -267,10 +266,13 @@ class StylelizedTransformerBlock(nn.Module):
         self.upsample = upsample
         self.res_min = res_min
         self.res_max = res_max
-        self.sample_size = sample_size
+        self.sample_size = sample_size # Not used for now
         self.activation = activation
         self.use_layer_norm = use_layer_norm
-        self.no_pointwise_linear = no_pointwise_linear
+
+        shuffle_indices = get_shuffle_table_indices(table_num, feat_dim)
+        self.register_buffer('shuffle_indices', shuffle_indices)
+        
 
         self._build_blocks()
 
@@ -278,28 +280,26 @@ class StylelizedTransformerBlock(nn.Module):
         self.t_blocks = nn.ModuleList()
         self.l_layers = nn.ModuleList()
         for _ in range(self.block_num):
-            self.t_blocks.append(HashAttention(
-                self.table_num,
-                self.res_min,
-                self.res_max,
-                self.s_dim,
-                sample_size=self.sample_size,
-                head_num=self.head_num
-            ))
-            self.l_layers.append(TokenWiseModulatedLinear(
+            self.t_blocks.append(MultiHeadAttention(
                 self.feat_dim,
-                self.feat_dim,
-                self.table_num,
+                self.head_num,
                 self.s_dim,
                 activation=self.activation
-            ) if not self.no_pointwise_linear else nn.Identity())
+            ))
+            self.l_layers.append(ModulatedLinear(self.feat_dim,
+                                                 self.feat_dim,
+                                                 self.s_dim,
+                                                 activation=self.activation))
             
 
     def forward(self, x, s):
+        batch_size = x.size(0)
+        # Shuffle within hash tables
+        x = torch.gather(x, 2,
+                         self.shuffle_indices.unsqueeze(dim=0).repeat(batch_size, 1, 1))
         for t, l in zip(self.t_blocks, self.l_layers):
             x = F.layer_norm(t(x, s) + x, (self.feat_dim,))
-            if not self.no_pointwise_linear:
-                x = F.layer_norm(l(x, s) + x, (self.feat_dim,))
+            x = F.layer_norm(l(x, s) + x, (self.feat_dim,))
         return x
         
     

@@ -1,0 +1,23 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/usr/local/cuda/include",
+                "/localhome/dya62/miniconda3/envs/pt/lib/python3.8/site-packages/torch/include",
+                "/localhome/dya62/miniconda3/envs/pt/lib/python3.8/site-packages/torch/include/torch/csrc/api/include",
+                "/localhome/dya62/miniconda3/envs/pt/lib/python3.8/site-packages/torch/include/TH",
+                "/localhome/dya62/miniconda3/envs/pt/lib/python3.8/site-packages/torch/include/THC",
+                "/localhome/dya62/miniconda3/envs/pt/lib/python3.8/site-packages/torch/include/ATen/cuda",
+                "/usr/include/python3.8"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/local/cuda/bin/nvcc",
+            "cStandard": "c17",
+            "cppStandard": "c++14",
+            "intelliSenseMode": "linux-clang-x64"
+        }
+    ],
+    "version": 4
+}
