@@ -255,7 +255,8 @@ class StylelizedTransformerBlock(nn.Module):
                  sample_size:int=64,
                  use_layer_norm=True,
                  upsample=False,
-                 use_prob_attention=False
+                 use_prob_attention=False,
+                 hidden_dim: int=None
                  ):
         """
             Args:
@@ -271,6 +272,7 @@ class StylelizedTransformerBlock(nn.Module):
                 sample_size (int): sample size to do spatial attention.
                 use_layer_norm (bool): Whether to use layer normalization in 
                     transformer. (default: False)
+                hidden_dim (int): Hidden dimension of attention. 
         """
         super().__init__()
         self.feat_dim = feat_dim
@@ -285,6 +287,7 @@ class StylelizedTransformerBlock(nn.Module):
         self.activation = activation
         self.use_layer_norm = use_layer_norm
         self.use_prob_attention = use_prob_attention
+        self.hidden_dim = hidden_dim
 
         self._build_blocks()
 
@@ -296,6 +299,7 @@ class StylelizedTransformerBlock(nn.Module):
                 self.feat_dim,
                 self.head_num,
                 self.s_dim,
+                hidden_dim=self.hidden_dim,
                 activation=self.activation,
                 use_prob_attention=self.use_prob_attention
             ))

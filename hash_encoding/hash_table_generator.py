@@ -109,7 +109,6 @@ class HashTableGenerator(nn.Module):
                                                          self.style_dim,
                                                          self.res_min,
                                                          self.res_max,
-                                                         sample_size=SAMPLE_SIZE,
                                                          block_num=block_num,
                                                          activation=nn.ReLU,
                                                          use_prob_attention=True)
