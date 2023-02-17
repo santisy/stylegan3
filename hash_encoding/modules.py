@@ -15,6 +15,7 @@ from hash_encoding.layers import ModulatedLinear
 from hash_encoding.layers import TokenWiseModulatedLinear
 from hash_retrieve_module import HashTableRetrieve
 from hash_retrieve_module import HashTableRecon
+from hash_encoding.prob_attention import ProbAttention
 from utils.utils import get_shuffle_table_indices
 from utils.utils import render
 from utils.utils import sample_coords
@@ -22,6 +23,7 @@ from utils.utils import sample_coords
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, feat_dim: int, head_num: int, s_dim: int,
+                 use_prob_attention: bool=False,
                  hidden_dim: int=None,
                  out_dim: int=None,
                  activation=nn.Identity):
@@ -47,6 +49,9 @@ class MultiHeadAttention(nn.Module):
         self.v_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim,
                                          activation=activation)
         self.o_mapping = ModulatedLinear(self.hidden_dim, self.out_dim, s_dim)
+        self.use_prob_attention = use_prob_attention
+        if use_prob_attention:
+            self.prob_atten = ProbAttention(mask_flag=False, factor=5)
 
     def _resize_head_to_batch(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -83,6 +88,9 @@ class MultiHeadAttention(nn.Module):
             Args:
                 q, k, v are all torch.Tensor and shapes of B x N x C
         """
+        q = self._resize_head_to_batch(q)
+        k = self._resize_head_to_batch(k)
+        v = self._resize_head_to_batch(v)
         # A is of shape B x N x N
         A = F.softmax(torch.einsum('bnc,bkc->bnk', q, k) / math.sqrt(self.head_dim), dim=-1)
         out = torch.einsum('bnk,bkc->bnc', A, v) 
@@ -98,13 +106,17 @@ class MultiHeadAttention(nn.Module):
         token_num = x.shape[1]
 
         # (B x H) x N x C
-        k = self._resize_head_to_batch(self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim))
-        q = self._resize_head_to_batch(self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim))
-        v = self._resize_head_to_batch(self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim))
+        k = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        q = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        v = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
 
-        out = self._resize_head_back(self._scaled_dot_product_attention(k, q, v),
-                                     batch_size,
-                                     token_num)
+        if not self.use_prob_attention:
+            out = self._resize_head_back(self._scaled_dot_product_attention(k, q, v),
+                                        batch_size,
+                                        token_num)
+        else:
+            out = self.prob_atten(q, k, v, None)[0]
+            out = out.reshape(batch_size, token_num, -1)
         
         out = self.o_mapping(out, s)
 
@@ -187,7 +199,6 @@ class HashAttention(nn.Module):
                                                  self.res_min,
                                                  self.res_max)
 
-        # FIXME: The normalizing should be inside Hash Table Recon
         return recon_hash_tables.reshape(batch_size, table_num, -1)
 
 
@@ -196,7 +207,7 @@ class StackedModulatedMLP(nn.Module):
                  n_layers: int,
                  in_activ=nn.ReLU,
                  out_activ=nn.Tanh,
-                 norm_layer=nn.Identity):
+                 use_layer_norm: bool=False):
         """
             Args:
                 in_ch: input dimension
@@ -208,11 +219,12 @@ class StackedModulatedMLP(nn.Module):
                 in_activ : inside (hidden layers) activation
                 out_activ : output activation
                 norm_layer (nn.Module): if Other normalization is used
+                use_layer_norm (nn.Module): Use layer normalization
         """
         super().__init__()
 
         self.module_list = nn.ModuleList()
-        self.norm_layer = norm_layer
+        self.use_layer_norm = use_layer_norm
 
         for i in range(n_layers):
             if i == 0:
@@ -225,6 +237,8 @@ class StackedModulatedMLP(nn.Module):
     def forward(self, x, s):
         for m in self.module_list:
             x = m(x, s)
+            if self.use_layer_norm:
+                x = F.layer_norm(x, [x.size(-1),])
         return x
 
 
@@ -241,6 +255,7 @@ class StylelizedTransformerBlock(nn.Module):
                  sample_size:int=64,
                  use_layer_norm=True,
                  upsample=False,
+                 use_prob_attention=False
                  ):
         """
             Args:
@@ -269,10 +284,7 @@ class StylelizedTransformerBlock(nn.Module):
         self.sample_size = sample_size # Not used for now
         self.activation = activation
         self.use_layer_norm = use_layer_norm
-
-        shuffle_indices = get_shuffle_table_indices(table_num, feat_dim)
-        self.register_buffer('shuffle_indices', shuffle_indices)
-        
+        self.use_prob_attention = use_prob_attention
 
         self._build_blocks()
 
@@ -284,7 +296,8 @@ class StylelizedTransformerBlock(nn.Module):
                 self.feat_dim,
                 self.head_num,
                 self.s_dim,
-                activation=self.activation
+                activation=self.activation,
+                use_prob_attention=self.use_prob_attention
             ))
             self.l_layers.append(ModulatedLinear(self.feat_dim,
                                                  self.feat_dim,
@@ -293,10 +306,7 @@ class StylelizedTransformerBlock(nn.Module):
             
 
     def forward(self, x, s):
-        batch_size = x.size(0)
         # Shuffle within hash tables
-        x = torch.gather(x, 2,
-                         self.shuffle_indices.unsqueeze(dim=0).repeat(batch_size, 1, 1))
         for t, l in zip(self.t_blocks, self.l_layers):
             x = F.layer_norm(t(x, s) + x, (self.feat_dim,))
             x = F.layer_norm(l(x, s) + x, (self.feat_dim,))

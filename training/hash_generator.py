@@ -114,7 +114,7 @@ class HashGenerator(nn.Module):
                                             mlp_out_dim,
                                             style_dim,
                                             3,
-                                            norm_layer=norm_layer)
+                                            use_layer_norm=more_layer_norm)
 
 
         self.register_buffer('s_avg', torch.zeros([style_dim]))

@@ -56,7 +56,6 @@ class HashTableGenerator(nn.Module):
 
         self.table_num = table_num
         self.table_size_log2 = table_size_log2
-        self.init_dim = init_dim
         self.res_max = res_max
         self.res_min = res_min
         self.head_dim = head_dim
@@ -73,9 +72,14 @@ class HashTableGenerator(nn.Module):
         res_list = res_list.unsqueeze(dim=0) # 1 x H_N
         dprint(f'Hash table resolution list is {res_list}')
 
+        init_dim = table_num
+        self.init_dim = table_num
+        self.levels = L = int(self.table_size_log2 - np.log2(init_dim))
+        self.init_token_num = init_token_num = int(table_num * 2 ** L)
+        # NOTE: we forcefully set 
         self.register_buffer('pos_encoding',
-                             sinuous_pos_encode(table_num, self.init_dim))
-
+                             sinuous_pos_encode(init_token_num,
+                                                self.init_dim))
         self._build_layers()
 
     def _get_block_num(self, dim_now: int) -> List[int]:
@@ -86,7 +90,8 @@ class HashTableGenerator(nn.Module):
         """This is where to put layer building."""
         # Upsample levels to go
         input_dim = self.init_dim
-        self.levels = L = int(self.table_size_log2 - np.log2(input_dim))
+        init_token_num = self.init_token_num
+        L = self.levels
 
         for i in range(L+1):
             dim_now = int(input_dim * 2 ** i)
@@ -95,7 +100,8 @@ class HashTableGenerator(nn.Module):
             nhead_now = max(dim_now // head_dim_now, 1)
             # Use the dim_now to compute block_num and sample_size
             block_num = 2
-
+            # Use ProbAttention or not 
+            token_num_now = int(init_token_num / (2 ** i))
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
                                                          nhead_now,
@@ -105,24 +111,9 @@ class HashTableGenerator(nn.Module):
                                                          self.res_max,
                                                          sample_size=SAMPLE_SIZE,
                                                          block_num=block_num,
-                                                         activation=nn.ReLU)
+                                                         activation=nn.ReLU,
+                                                         use_prob_attention=True)
             setattr(self, f'transformer_block_{i}', transform_block)
-            if i != L:
-                setattr(self, f'mlp_up_{i}',
-                        HashUp(self.table_num, dim_now,
-                               learnable=self.linear_up,
-                               fixed_random=self.fixed_random,
-                               res_min=self.res_min,
-                               res_max=self.res_max))
-            if self.output_skip:
-                # Output layer
-                setattr(self, f'side_up_{i}',
-                        HashUp(self.table_num,
-                            dim_now // 2,
-                            learnable=self.linear_up,
-                            fixed_random=self.fixed_random,
-                            res_min=self.res_min,
-                            res_max=self.res_max))
 
     def _sample_coords(self, b, res_now):
         # 2D sampling case
@@ -148,16 +139,11 @@ class HashTableGenerator(nn.Module):
         # Transformers following
         for i in range(self.levels+1):
             x = getattr(self, f'transformer_block_{i}')(x, next(s_iter))
-            if self.output_skip:
-                if i == 0:
-                    out = x
-                else:
-                    out = getattr(self, f'side_up_{i}')(out) + x
             if i != self.levels:
-                x = getattr(self, f'mlp_up_{i}')(x)
-
-        if not self.output_skip:
-            out = x
+                n = x.size(1)
+                x = x.reshape(b, n//2, -1)
+            else:
+                out = x
 
         hash_tables = out.reshape(out.shape[0], out.shape[1],
                                   out.shape[2] // self.F,
