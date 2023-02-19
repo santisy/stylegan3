@@ -38,6 +38,8 @@ class HashGenerator(nn.Module):
                  linear_up: bool=True,
                  s_avg_beta: float=0.998,
                  output_skip: bool=True,
+                 map_depth: int=2,
+                 shuffle_input: bool=False,
                  **kwargs
                  ):
         """
@@ -67,6 +69,9 @@ class HashGenerator(nn.Module):
                 w_avg_beta (float): Decay for tracking moving average of S
                     during training.
                 output_skip (bool): If use output skip. (default: True)
+                map_depth (bool): Mappig network depth. (default: 2)
+                shuffle_input (bool): shuffle input of each block according to 
+                    indices (default: False)
         """
         super().__init__()
         self.res_min = res_min
@@ -83,14 +88,15 @@ class HashGenerator(nn.Module):
         norm_layer = nn.LayerNorm if more_layer_norm else nn.Identity
 
         # The s_mapping network
-        self.s_mapping = nn.Sequential(
+        s_mapping = [
             FullyConnectedLayer(z_dim, style_dim, activation='lrelu'),
             norm_layer(style_dim),
+        ]
+        for _ in range(map_depth):
+            s_mapping.extend([
             FullyConnectedLayer(style_dim, style_dim, activation='lrelu'),
-            norm_layer(style_dim),
-            FullyConnectedLayer(style_dim, style_dim, activation='lrelu'),
-            norm_layer(style_dim)
-        )
+            norm_layer(style_dim),])
+        self.s_mapping = nn.Sequential(*s_mapping)
 
         # The hash table generator based on style
         self.hash_table_generator = HashTableGenerator(
@@ -105,6 +111,7 @@ class HashGenerator(nn.Module):
                                         fixed_random=fixed_random,
                                         linear_up=linear_up,
                                         output_skip=output_skip,
+                                        shuffle_input=shuffle_input
                                         )
 
         #TODO: substitue this to mini-mlp?
@@ -114,7 +121,7 @@ class HashGenerator(nn.Module):
                                             mlp_out_dim,
                                             style_dim,
                                             3,
-                                            use_layer_norm=more_layer_norm)
+                                            use_layer_norm=False)
 
 
         self.register_buffer('s_avg', torch.zeros([style_dim]))

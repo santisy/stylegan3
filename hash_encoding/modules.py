@@ -256,7 +256,8 @@ class StylelizedTransformerBlock(nn.Module):
                  use_layer_norm=True,
                  upsample=False,
                  use_prob_attention=False,
-                 hidden_dim: int=None
+                 hidden_dim: int=None,
+                 shuffle_input: bool=False
                  ):
         """
             Args:
@@ -273,6 +274,7 @@ class StylelizedTransformerBlock(nn.Module):
                 use_layer_norm (bool): Whether to use layer normalization in 
                     transformer. (default: False)
                 hidden_dim (int): Hidden dimension of attention. 
+                shuffle_input (bool): Whether to shuffle input according to some indices
         """
         super().__init__()
         self.feat_dim = feat_dim
@@ -284,10 +286,15 @@ class StylelizedTransformerBlock(nn.Module):
         self.res_min = res_min
         self.res_max = res_max
         self.sample_size = sample_size # Not used for now
+        self.shuffle_input = shuffle_input
         self.activation = activation
         self.use_layer_norm = use_layer_norm
         self.use_prob_attention = use_prob_attention
         self.hidden_dim = hidden_dim
+
+        if shuffle_input:
+            random_indices = get_shuffle_table_indices(table_num, feat_dim)
+            self.register_buffer('random_indices', random_indices)
 
         self._build_blocks()
 
@@ -309,7 +316,10 @@ class StylelizedTransformerBlock(nn.Module):
                                                  activation=self.activation))
             
 
-    def forward(self, x, s):
+    def forward(self, x: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+        batch_size = x.size(0)
+        if self.shuffle_input:
+            x = torch.gather(x, -1, self.random_indices.repeat(batch_size, 1, 1))
         # Shuffle within hash tables
         for t, l in zip(self.t_blocks, self.l_layers):
             x = F.layer_norm(t(x, s) + x, (self.feat_dim,))

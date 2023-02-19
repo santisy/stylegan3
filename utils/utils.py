@@ -72,7 +72,7 @@ def get_shuffle_table_indices(table_num: int, table_dim: int) -> torch.Tensor:
     indices_collect = []
     for _ in range(table_num):
         indices_collect.append(torch.randperm(table_dim))
-    return torch.stack(indices_collect, dim=0)
+    return torch.stack(indices_collect, dim=0).unsqueeze(dim=0)
 
 
 def render(x: torch.Tensor, img_size: int):

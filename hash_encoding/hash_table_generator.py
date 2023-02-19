@@ -33,6 +33,7 @@ class HashTableGenerator(nn.Module):
                  linear_up: bool=True,
                  resample_filter=[1,3,3,1],
                  output_skip: bool=True,
+                 shuffle_input: bool=False,
                  ):
         """
             Args:
@@ -51,6 +52,8 @@ class HashTableGenerator(nn.Module):
                 fixed_random (bool): The fixed weight is randomized or not.
                 resample_filter (List): Low pass filter
                 output_skip (bool): If use output skip. (default: True)
+                shuffle_input (bool): shuffle input of each block according to 
+                    indices (default: False)
         """
         super(HashTableGenerator, self).__init__()
 
@@ -65,6 +68,7 @@ class HashTableGenerator(nn.Module):
         self.fixed_random = fixed_random
         self.linear_up = linear_up
         self.output_skip = output_skip
+        self.shuffle_input = shuffle_input
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
 
         b = np.exp((np.log(res_max) - np.log(res_min)) / (table_num - 1))
@@ -105,12 +109,14 @@ class HashTableGenerator(nn.Module):
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
                                                          nhead_now,
-                                                         self.table_num,
+                                                         token_num_now,
                                                          self.style_dim,
                                                          self.res_min,
                                                          self.res_max,
                                                          block_num=block_num,
+                                                         hidden_dim=dim_now*4,
                                                          activation=nn.ReLU,
+                                                         shuffle_input=self.shuffle_input,
                                                          use_prob_attention=True)
             setattr(self, f'transformer_block_{i}', transform_block)
 

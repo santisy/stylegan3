@@ -147,7 +147,7 @@ def parse_comma_separated_list(s):
 @click.option('--cmax',         help='Max. feature maps', metavar='INT',                        type=click.IntRange(min=1), default=512, show_default=True)
 @click.option('--glr',          help='G learning rate  [default: varies]', metavar='FLOAT',     type=click.FloatRange(min=0))
 @click.option('--dlr',          help='D learning rate', metavar='FLOAT',                        type=click.FloatRange(min=0), default=0.002, show_default=True)
-@click.option('--map-depth',    help='Mapping network depth  [default: varies]', metavar='INT', type=click.IntRange(min=1))
+@click.option('--map-depth',    help='Mapping network depth  [default: varies]', metavar='INT', type=click.IntRange(min=1), default=2, show_default=True)
 @click.option('--mbstd-group',  help='Minibatch std group size', metavar='INT',                 type=click.IntRange(min=1), default=4, show_default=True)
 
 # Misc settings.
@@ -178,6 +178,7 @@ def parse_comma_separated_list(s):
 @click.option('--fixed_random',     help='The upsample is fixed but randomized.',               type=bool, default=True,  show_default=True)
 @click.option('--linear_up',    help='The upsample is linear or not.',                          type=bool, default=True, show_default=True)
 @click.option('--output_skip',  help='Output skip true or not',                                 type=bool, default=True, show_default=True)
+@click.option('--shuffle_input', help='Shuffle the input accoridng to random indices',          type=bool, default=False, show_default=True)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -220,6 +221,8 @@ def main(**kwargs):
                                  fixed_random=opts.fixed_random,
                                  linear_up=opts.linear_up,
                                  output_skip=opts.output_skip,
+                                 map_depth=opts.map_depth,
+                                 shuffle_input=opts.shuffle_input
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
