@@ -310,10 +310,13 @@ class StylelizedTransformerBlock(nn.Module):
                 activation=self.activation,
                 use_prob_attention=self.use_prob_attention
             ))
-            self.l_layers.append(ModulatedLinear(self.feat_dim,
-                                                 self.feat_dim,
-                                                 self.s_dim,
-                                                 activation=self.activation))
+            self.l_layers.append(StackedModulatedMLP(self.feat_dim,
+                                                     self.feat_dim*2,
+                                                     self.feat_dim,
+                                                     self.s_dim,
+                                                     2,
+                                                     in_activ=self.activation,
+                                                     out_activ=None))
             
 
     def forward(self, x: torch.Tensor, s: torch.Tensor) -> torch.Tensor:

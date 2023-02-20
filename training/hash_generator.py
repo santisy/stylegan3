@@ -1,6 +1,7 @@
 """The Generator part, assembling differnent parts together."""
 import sys
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -126,24 +127,37 @@ class HashGenerator(nn.Module):
 
         self.register_buffer('s_avg', torch.zeros([style_dim]))
 
-    def _sample_coords(self, b) -> torch.Tensor:
+        self.b_level_img_size = np.exp((np.log(res_max) - np.log(res_min)) / (self.get_total_level_num - 1))
+
+    def get_current_level_res_size(self, level: int) -> int:
+        return int(self.res_min * self.b_level_img_size ** max(level, 0))
+
+    @property
+    def get_total_level_num(self) -> int:
+        return self.hash_table_generator.levels + 1
+
+    def _sample_coords(self, b, img_size: int=None) -> torch.Tensor:
         """
             Returns:
                 coords: B x N x (2 or 3)
+                img_size (int): Possible different img size during training
         """
         # 2D sampling case
-        coords = sample_coords(b, self.img_size)
+        img_size = self.img_size if img_size is None else img_size
+        coords = sample_coords(b, img_size)
         return coords
 
-    def _render(self, x) -> torch.Tensor:
+    def _render(self, x, img_size: int=None) -> torch.Tensor:
         """
             Render the sampled and went through linear results
             In 2D, it is just reshaping.
 
             Args:
                 x: B x N x OUT_DIM
+                img_size (int): Possible different img size during training
         """
-        return render(x, self.img_size)
+        img_size = self.img_size if img_size is None else img_size
+        return render(x, img_size)
 
     def mapping(self, z, c=None, update_emas=False, truncation_psi=1, **kwargs) -> torch.Tensor:
         # Main MLPs
@@ -159,47 +173,64 @@ class HashGenerator(nn.Module):
 
         return s.unsqueeze(dim=1).repeat([1, self.hash_table_generator.levels + 2, 1])
 
-    def synthesis(self, s: torch.Tensor, update_emas=False) -> torch.Tensor:
-        """
-            Args:
-                s: is the repeated fashion, for the stylemixing regularization
-        """
-        ## Getting hash tables
-        # The output size of the hash_tables is 
-        #   B x H_N (table_num) x H_S (2 ** table_size_log2 // 2) x 2
-        hash_tables = self.hash_table_generator(s)
-
-
+    def _hash_and_render_out(self, hash_tables, s, sample_size=None):
         # Retrieve from hash tables according to coordinates
         # The output size of retrieved feature is
         #   B x N x (table_num * F), value range [0, 1]
-        coords = self._sample_coords(s.shape[0]).to(hash_tables.dtype
-                                               ).to(hash_tables.device)
+        coords = self._sample_coords(hash_tables.size(0),
+                                     img_size=sample_size).to(hash_tables.dtype
+                                                         ).to(hash_tables.device)
         hash_retrieved_feature = HashTableRetrieve.apply(hash_tables,
                                                          coords,
                                                          self.res_min,
                                                          self.res_max)
-
-        # Go through small MLPs
-        if self.modulated_mini_linear:
-            mlp_out = self.mini_linear(hash_retrieved_feature, s[:, -1]) # B x N x OUT_DIM
-        else:
-            mlp_out = self.mini_linear(hash_retrieved_feature)
-
+        mlp_out = self.mini_linear(hash_retrieved_feature, s[:, -1]) # B x N x OUT_DIM
         ## Rendering
-        out = self._render(mlp_out)
+        out = self._render(mlp_out, sample_size)
+        return out
+
+    def synthesis(self,
+                  s: torch.Tensor,
+                  update_emas: bool=False,
+                  sample_size: int=None,
+                  out_level: int=None,
+                  linear_fuse_ratio: float=None) -> torch.Tensor:
+        """
+            Args:
+                s: is the repeated fashion, for the stylemixing regularization
+                out_level (int): If not None, the level will return at out_level
+                    and only train out_level + 1
+                linear_fuse_ration (float): If None, then we would fuse the 
+                    lower level output with larger level. Fading in.
+        """
+        ## Getting hash tables
+        # The output size of the hash_tables is 
+        #   B x H_N (table_num) x H_S (2 ** table_size_log2 // 2) x 2
+        hash_tables, pre_hash_tables = self.hash_table_generator(s, out_level=out_level)
+
+        out = self._hash_and_render_out(hash_tables, s, sample_size=sample_size)
+        pre_out = self._hash_and_render_out(pre_hash_tables, s,
+                                            sample_size=self.get_current_level_res_size(out_level-1))
+        out = out * linear_fuse_ratio * out + (1 - linear_fuse_ratio) * pre_out
 
         return out
 
 
-    def forward(self, z: torch.Tensor, c=None, update_emas=False, **kwargs):
+    def forward(self, z: torch.Tensor, c=None, update_emas=False,
+                out_level: int=None, sample_size: int=None,
+                linear_fuse_ratio: float=None,
+                **kwargs):
         """
             Args:
                 z: B x Z_DIM
         """
         # The style mapping
         s = self.mapping(z, c)
-        img = self.synthesis(s, update_emas=update_emas)
+        img = self.synthesis(s,
+                             out_level=out_level,
+                             sample_size=sample_size,
+                             update_emas=update_emas,
+                             linear_fuse_ratio=linear_fuse_ratio)
         return img
 
 
