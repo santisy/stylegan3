@@ -50,25 +50,6 @@ class StyleGAN2Loss(Loss):
         self.blur_init_sigma    = blur_init_sigma
         self.blur_fade_kimg     = blur_fade_kimg
 
-    def pg_scheduler(self, cur_nimg):
-        self.out_level = min((cur_nimg // 1000) // 100, self.G.get_total_level_num)
-        self.sample_size = self.G.get_current_level_res_size(self.out_level)
-        if cur_nimg < (self.G.get_total_level_num + 1) * 1000 * 100:
-            self.linear_fuse_ratio = min(cur_nimg % (1000 * 100) / float(1000 * 100 / 2), 1)
-        else:
-            self.linear_fuse_ratio = 1.0
-
-    def _preprocess_real_img(self, real_img):
-        if self.sample_size != self.G.img_size:
-            real_img = F.interpolate(real_img,
-                                    size=(self.sample_size, self.sample_size),
-                                    mode='bilinear', align_corners=False,
-                                    antialias=True)
-            real_img = F.interpolate(real_img,
-                                    size=(self.G.img_size, self.G.img_size),
-                                    mode='bilinear')
-        return real_img
-
     def run_G(self, z, c, update_emas=False):
         ws = self.G.mapping(z, c, update_emas=update_emas)
         if self.style_mixing_prob > 0:
@@ -76,13 +57,7 @@ class StyleGAN2Loss(Loss):
                 cutoff = torch.empty([], dtype=torch.int64, device=ws.device).random_(1, ws.shape[1])
                 cutoff = torch.where(torch.rand([], device=ws.device) < self.style_mixing_prob, cutoff, torch.full_like(cutoff, ws.shape[1]))
                 ws[:, cutoff:] = self.G.mapping(torch.randn_like(z), c, update_emas=False)[:, cutoff:]
-        img = self.G.synthesis(ws,
-                               update_emas=update_emas,
-                               sample_size=self.sample_size,
-                               out_level=self.out_level,
-                               linear_fuse_ratio=self.linear_fuse_ratio)
-        img = F.interpolate(img, size=(self.G.img_size, self.G.img_size),
-                            mode='bilinear')
+        img = self.G.synthesis(ws, z, update_emas=update_emas)
         return img, None
 
     def run_D(self, img, c, blur_sigma=0, update_emas=False):
@@ -103,9 +78,6 @@ class StyleGAN2Loss(Loss):
         if self.r1_gamma == 0:
             phase = {'Dreg': 'none', 'Dboth': 'Dmain'}.get(phase, phase)
         blur_sigma = max(1 - cur_nimg / (self.blur_fade_kimg * 1e3), 0) * self.blur_init_sigma if self.blur_fade_kimg > 0 else 0
-
-        # Progressive training scheduler, update possible running
-        self.pg_scheduler(cur_nimg)
 
         # Gmain: Maximize logits for generated images.
         if phase in ['Gmain', 'Gboth']:

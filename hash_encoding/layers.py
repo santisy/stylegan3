@@ -39,9 +39,12 @@ class ModulatedLinear(nn.Module):
         w = w * s.reshape(batch_size, 1, -1)
         decoefs = (w.square().sum(dim=[2]) + 1e-8).rsqrt() # B x O
 
-        x = x * s.reshape(batch_size, 1, -1)
+        s = s.unsqueeze(dim=1) if x.dim() == 3 else s
+        decoefs = decoefs.unsqueeze(dim=1) if x.dim() == 3 else decoefs
+
+        x = x * s
         x = F.linear(x, weight, bias=self.bias) # B x (N) x O
-        x = x * decoefs.reshape(batch_size,  1, -1)
+        x = x * decoefs
         if self.activ is not None:
             x = self.activ(x)
 

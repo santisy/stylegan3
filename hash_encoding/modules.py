@@ -22,7 +22,7 @@ from utils.utils import sample_coords
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, feat_dim: int, head_num: int, s_dim: int,
+    def __init__(self, feat_dim: int, head_dim: int, s_dim: int,
                  use_prob_attention: bool=False,
                  hidden_dim: int=None,
                  out_dim: int=None,
@@ -38,11 +38,11 @@ class MultiHeadAttention(nn.Module):
         """
         super().__init__()
         self.feat_dim = feat_dim
-        self.head_num = head_num
         self.s_dim = s_dim
         self.hidden_dim = feat_dim if hidden_dim is None else hidden_dim
         self.out_dim = feat_dim if out_dim is None else out_dim
-        self.head_dim = self.hidden_dim // head_num
+        self.head_dim = head_dim
+        self.head_num = self.hidden_dim // head_dim
 
         self.k_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
         self.q_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
@@ -102,8 +102,8 @@ class MultiHeadAttention(nn.Module):
                 x: B x N x FEAT_DIM
                 s: B x S_DIM
         """
-        batch_size = x.shape[0]
-        token_num = x.shape[1]
+        batch_size = x.size(0)
+        token_num = x.size(1)
 
         # (B x H) x N x C
         k = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
@@ -245,7 +245,7 @@ class StackedModulatedMLP(nn.Module):
 class StylelizedTransformerBlock(nn.Module):
     def __init__(self,
                  feat_dim: int,
-                 head_num: int,
+                 head_dim: int,
                  table_num: int,
                  s_dim: int,
                  res_min: int,
@@ -262,7 +262,7 @@ class StylelizedTransformerBlock(nn.Module):
         """
             Args:
                 feat_dim: The token dimension of the input
-                head_num: The head number
+                head_dim: Head dimension
                 table_num: The table number of the token
                 s_dim: style mapping size
                 res_min (int): minimum resolution
@@ -278,7 +278,7 @@ class StylelizedTransformerBlock(nn.Module):
         """
         super().__init__()
         self.feat_dim = feat_dim
-        self.head_num = head_num
+        self.head_dim = head_dim
         self.table_num = table_num
         self.s_dim = s_dim
         self.block_num = block_num
@@ -304,19 +304,16 @@ class StylelizedTransformerBlock(nn.Module):
         for _ in range(self.block_num):
             self.t_blocks.append(MultiHeadAttention(
                 self.feat_dim,
-                self.head_num,
+                self.head_dim,
                 self.s_dim,
                 hidden_dim=self.hidden_dim,
                 activation=self.activation,
                 use_prob_attention=self.use_prob_attention
             ))
-            self.l_layers.append(StackedModulatedMLP(self.feat_dim,
-                                                     self.feat_dim*2,
-                                                     self.feat_dim,
-                                                     self.s_dim,
-                                                     2,
-                                                     in_activ=self.activation,
-                                                     out_activ=None))
+            self.l_layers.append(ModulatedLinear(self.feat_dim,
+                                                 self.feat_dim,
+                                                 self.s_dim,
+                                                 activation=self.activation))
             
 
     def forward(self, x: torch.Tensor, s: torch.Tensor) -> torch.Tensor:

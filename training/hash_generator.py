@@ -4,6 +4,7 @@ import sys
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 sys.path.insert(0, '.')
 from torch_utils import persistence
@@ -101,6 +102,7 @@ class HashGenerator(nn.Module):
 
         # The hash table generator based on style
         self.hash_table_generator = HashTableGenerator(
+                                        z_dim=z_dim,
                                         table_num=table_num,
                                         table_size_log2=table_size_log2,
                                         res_min=res_min,
@@ -171,7 +173,7 @@ class HashGenerator(nn.Module):
         if truncation_psi != 1:
             s = self.s_avg.lerp(s, truncation_psi)
 
-        return s.unsqueeze(dim=1).repeat([1, self.hash_table_generator.levels + 2, 1])
+        return s.unsqueeze(dim=1).repeat([1, self.hash_table_generator.levels + 3, 1])
 
     def _hash_and_render_out(self, hash_tables, s, sample_size=None):
         # Retrieve from hash tables according to coordinates
@@ -191,10 +193,9 @@ class HashGenerator(nn.Module):
 
     def synthesis(self,
                   s: torch.Tensor,
+                  z: torch.Tensor,
                   update_emas: bool=False,
-                  sample_size: int=None,
-                  out_level: int=None,
-                  linear_fuse_ratio: float=None) -> torch.Tensor:
+                  sample_size: int=None) -> torch.Tensor:
         """
             Args:
                 s: is the repeated fashion, for the stylemixing regularization
@@ -206,31 +207,20 @@ class HashGenerator(nn.Module):
         ## Getting hash tables
         # The output size of the hash_tables is 
         #   B x H_N (table_num) x H_S (2 ** table_size_log2 // 2) x 2
-        hash_tables, pre_hash_tables = self.hash_table_generator(s, out_level=out_level)
-
+        hash_tables = self.hash_table_generator(s, z)
         out = self._hash_and_render_out(hash_tables, s, sample_size=sample_size)
-        pre_out = self._hash_and_render_out(pre_hash_tables, s,
-                                            sample_size=self.get_current_level_res_size(out_level-1))
-        out = out * linear_fuse_ratio * out + (1 - linear_fuse_ratio) * pre_out
 
         return out
 
 
-    def forward(self, z: torch.Tensor, c=None, update_emas=False,
-                out_level: int=None, sample_size: int=None,
-                linear_fuse_ratio: float=None,
-                **kwargs):
+    def forward(self, z: torch.Tensor, c=None, update_emas=False, **kwargs):
         """
             Args:
                 z: B x Z_DIM
         """
         # The style mapping
         s = self.mapping(z, c)
-        img = self.synthesis(s,
-                             out_level=out_level,
-                             sample_size=sample_size,
-                             update_emas=update_emas,
-                             linear_fuse_ratio=linear_fuse_ratio)
+        img = self.synthesis(s, z, update_emas=update_emas)
         return img
 
 

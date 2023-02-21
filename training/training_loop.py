@@ -356,8 +356,6 @@ def training_loop(
             images = torch.cat([G_ema(z=z,
                                       c=c,
                                       noise_mode='const',
-                                      sample_size=loss.sample_size,
-                                      out_level=loss.out_level
                                       ).cpu() for z, c in zip(grid_z, grid_c)]).numpy()
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
             if stats_tfevents is not None:
