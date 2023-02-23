@@ -17,7 +17,6 @@ from hash_encoding.modules import HashSideOut
 from hash_encoding.modules import StackedModulatedMLP
 from hash_encoding.layers import ModulatedLinear
 
-SAMPLE_SIZE = 128
 
 class HashTableGenerator(nn.Module):
     def __init__(self,
@@ -36,6 +35,7 @@ class HashTableGenerator(nn.Module):
                  resample_filter=[1,3,3,1],
                  output_skip: bool=True,
                  shuffle_input: bool=False,
+                 spatial_atten: bool=False,
                  ):
         """
             Args:
@@ -57,6 +57,7 @@ class HashTableGenerator(nn.Module):
                 output_skip (bool): If use output skip. (default: True)
                 shuffle_input (bool): shuffle input of each block according to 
                     indices (default: False)
+                spatial_atten (bool): Spatial attention or not. (default: False)
         """
         super(HashTableGenerator, self).__init__()
 
@@ -74,22 +75,23 @@ class HashTableGenerator(nn.Module):
         self.linear_up = linear_up
         self.output_skip = output_skip
         self.shuffle_input = shuffle_input
+        self.spatial_atten= spatial_atten
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
         self.levels = int(self.table_size_log2 - np.log2(self.init_dim))
+        self.data_dim = 2 # Is this a 2D data or 3D data
 
-        b = np.exp((np.log(res_max) - np.log(res_min)) / (table_num - 1))
-        res_list = res_min * b ** torch.arange(table_num)
-        res_list = res_list.unsqueeze(dim=0) # 1 x H_N
-        dprint(f'Hash table resolution list is {res_list}')
+        self.b_res = np.exp((np.log(res_max) - np.log(res_min)) / (self.levels))
 
         # NOTE: we forcefully set 
         self.register_buffer('pos_encoding',
                              sinuous_pos_encode(table_num,
                                                 self.init_dim))
         self._build_layers()
+        dprint('Finished building hash table generator.', color='g')
 
-    def _get_block_num(self, dim_now: int) -> List[int]:
-        pass
+    @property
+    def s_num(self) -> int:
+        return self.levels + 3
 
     def _build_layers(self) -> None:
         """This is where to put layer building."""
@@ -102,7 +104,10 @@ class HashTableGenerator(nn.Module):
             # The dimension for a single head remains constant
             nhead_now = max(dim_now // head_dim_now, 1)
             # Use the dim_now to compute block_num and sample_size
-            block_num = 1
+            block_num = 2
+            # Sample size and sample res
+            sample_size = min(dim_now // 2, 128)
+            sample_res = int(self.res_min * self.b_res ** i)
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
                                                          head_dim_now,
@@ -114,30 +119,40 @@ class HashTableGenerator(nn.Module):
                                                          hidden_dim=dim_now,
                                                          activation=nn.ReLU,
                                                          shuffle_input=self.shuffle_input,
-                                                         use_prob_attention=False)
+                                                         use_prob_attention=False,
+                                                         spatial_atten=self.spatial_atten,
+                                                         sample_size=sample_size,
+                                                         sample_res=sample_res,
+                                                         only_linear=False)
             setattr(self, f'transformer_block_{i}', transform_block)
 
     def freeze_until_level(self, freeze_level)-> None:
         for i in range(freeze_level):
             getattr(self, f'transformer_block_{i}').requires_grad_(False)
     
-    def forward(self, s: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    def forward(self,
+                s1: torch.Tensor,
+                s2: torch.Tensor,
+                z: torch.Tensor) -> torch.Tensor:
         """
             Args:
-                s (torch.Tensor): B x S_DIM (The W, the mapped style code)
-
+                s1 (torch.Tensor): B x N_S x S_DIM (The W, the mapped style code)
+                s2 (torch.Tensor): possible additional style code
             Return:
                 hash_tables (torch.Tensor): B x H_N x H_S x (F=2)
                 out_level (int): If not None, the level will return at out_level
                     and only train out_level + 1
         """
-        b = s.size(0)
-        s_iter = iter(s.unbind(dim=1))
+        b = s1.size(0)
+        s1_iter = iter(s1.unbind(dim=1)) # The across table one
+        s2_iter = iter(s2.unbind(dim=1)) # THe along table one
         x = self.pos_encoding.repeat(b, 1, 1)
 
         # Transformers following
         for i in range(self.levels+1):
-            x = getattr(self, f'transformer_block_{i}')(x, next(s_iter))
+            x = getattr(self, f'transformer_block_{i}')(x,
+                                                        next(s1_iter),
+                                                        next(s2_iter))
             # Upscale or output
             if i != self.levels:
                 # Upscale as concat

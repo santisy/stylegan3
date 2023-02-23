@@ -12,6 +12,7 @@ from torch_utils import persistence
 from hash_encoding import HashTableGenerator
 from hash_encoding.layers import ModulatedLinear
 from hash_encoding.modules import StackedModulatedMLP
+from hash_encoding.other_networks import MappingNetwork
 from hash_retrieve_module import HashTableRetrieve
 from training.networks_stylegan2 import FullyConnectedLayer
 from utils.utils import sample_coords
@@ -42,6 +43,8 @@ class HashGenerator(nn.Module):
                  output_skip: bool=True,
                  map_depth: int=2,
                  shuffle_input: bool=False,
+                 spatial_atten: bool=False,
+                 two_style_code: bool=False,
                  **kwargs
                  ):
         """
@@ -74,6 +77,9 @@ class HashGenerator(nn.Module):
                 map_depth (bool): Mappig network depth. (default: 2)
                 shuffle_input (bool): shuffle input of each block according to 
                     indices (default: False)
+                spatial_atten (bool): Spatial attention or not. (default: False)
+                two_style_code (bool): Whether to use two separate style codes
+                    for horizontal and vertical modulation.
         """
         super().__init__()
         self.res_min = res_min
@@ -86,19 +92,13 @@ class HashGenerator(nn.Module):
         self.z_dim = z_dim
         self.c_dim = c_dim
 
-        # If use more normalization layer
-        norm_layer = nn.LayerNorm if more_layer_norm else nn.Identity
-
         # The s_mapping network
-        s_mapping = [
-            FullyConnectedLayer(z_dim, style_dim, activation='lrelu'),
-            norm_layer(style_dim),
-        ]
-        for _ in range(map_depth):
-            s_mapping.extend([
-            FullyConnectedLayer(style_dim, style_dim, activation='lrelu'),
-            norm_layer(style_dim),])
-        self.s_mapping = nn.Sequential(*s_mapping)
+        self.s_mapping = MappingNetwork(in_ch=z_dim,
+                                        map_depth=map_depth,
+                                        style_dim=style_dim,
+                                        hidden_ch=style_dim,
+                                        use_layer_norm=use_layer_norm,
+                                        two_style_code=two_style_code)
 
         # The hash table generator based on style
         self.hash_table_generator = HashTableGenerator(
@@ -114,7 +114,8 @@ class HashGenerator(nn.Module):
                                         fixed_random=fixed_random,
                                         linear_up=linear_up,
                                         output_skip=output_skip,
-                                        shuffle_input=shuffle_input
+                                        shuffle_input=shuffle_input,
+                                        spatial_atten=spatial_atten,
                                         )
 
         #TODO: substitue this to mini-mlp?
@@ -163,17 +164,18 @@ class HashGenerator(nn.Module):
 
     def mapping(self, z, c=None, update_emas=False, truncation_psi=1, **kwargs) -> torch.Tensor:
         # Main MLPs
-        s = self.s_mapping(z)
+        s1, s2 = self.s_mapping(z)
 
-        # Update EMAs
-        if update_emas:
-            self.s_avg.copy_(s.detach().mean(dim=0).lerp(self.s_avg, self.s_avg_beta))
+        ## Update EMAs
+        #if update_emas:
+        #    self.s_avg.copy_(s.detach().mean(dim=0).lerp(self.s_avg, self.s_avg_beta))
 
-        # Apply truncation
-        if truncation_psi != 1:
-            s = self.s_avg.lerp(s, truncation_psi)
+        ## Apply truncation
+        #if truncation_psi != 1:
+        #    s = self.s_avg.lerp(s, truncation_psi)
 
-        return s.unsqueeze(dim=1).repeat([1, self.hash_table_generator.levels + 3, 1])
+        return (s1.unsqueeze(dim=1).repeat([1, self.hash_table_generator.s_num, 1]),
+                s2.unsqueeze(dim=1).repeat([1, self.hash_table_generator.s_num, 1]))
 
     def _hash_and_render_out(self, hash_tables, s, sample_size=None):
         # Retrieve from hash tables according to coordinates
@@ -192,13 +194,15 @@ class HashGenerator(nn.Module):
         return out
 
     def synthesis(self,
-                  s: torch.Tensor,
+                  s1: torch.Tensor,
+                  s2: torch.Tensor,
                   z: torch.Tensor,
                   update_emas: bool=False,
                   sample_size: int=None) -> torch.Tensor:
         """
             Args:
-                s: is the repeated fashion, for the stylemixing regularization
+                s1: is the repeated fashion, for the stylemixing regularization
+                s2: possible additional style.
                 out_level (int): If not None, the level will return at out_level
                     and only train out_level + 1
                 linear_fuse_ration (float): If None, then we would fuse the 
@@ -207,8 +211,8 @@ class HashGenerator(nn.Module):
         ## Getting hash tables
         # The output size of the hash_tables is 
         #   B x H_N (table_num) x H_S (2 ** table_size_log2 // 2) x 2
-        hash_tables = self.hash_table_generator(s, z)
-        out = self._hash_and_render_out(hash_tables, s, sample_size=sample_size)
+        hash_tables = self.hash_table_generator(s1, s2, z)
+        out = self._hash_and_render_out(hash_tables, s1, sample_size=sample_size)
 
         return out
 
@@ -219,8 +223,8 @@ class HashGenerator(nn.Module):
                 z: B x Z_DIM
         """
         # The style mapping
-        s = self.mapping(z, c)
-        img = self.synthesis(s, z, update_emas=update_emas)
+        s1, s2 = self.mapping(z, c)
+        img = self.synthesis(s1, s2, z, update_emas=update_emas)
         return img
 
 

@@ -15,5 +15,7 @@ def dprint(print_str: str, color=''):
             print(f'\033[92m{print_str}\033[00m')
         elif color == 'y': # Yellow
             print(f'\033[93m{print_str}\033[00m')
+        elif color == 'b': # Blue
+            print(f'\033[94m{print_str}\033[00m')
         else:
             raise ValueError(f'Undefined color printing {color}.')

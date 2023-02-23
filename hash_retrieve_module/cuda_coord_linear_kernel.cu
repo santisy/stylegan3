@@ -61,7 +61,7 @@ __global__ void retrieve_from_hash_table_2D_kernel(
 
     // Const variables
     const long offsets[4][2] = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
-    const long primes[2] = {1, 2654435761};
+    const long primes[2] = {805459861, 2654435761};
 
     // Get the eight value
     for (int j = 0; j < h_n; j++){
@@ -117,7 +117,7 @@ __global__ void reconstruct_hash_table_2D_kernel(
 
     // Const variables
     const long offsets[4][2] = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
-    const long primes[2] = {1, 2654435761};
+    const long primes[2] = {805459861, 2654435761};
 
     // Get the eight value
     for (int j = 0; j < h_n; j++){

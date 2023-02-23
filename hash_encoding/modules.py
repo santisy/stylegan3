@@ -131,7 +131,9 @@ class HashAttention(nn.Module):
     def __init__(self, table_num: int, res_min: int, res_max: int,
                  style_dim: int,
                  sample_size: int,
-                 head_num: int,
+                 head_dim: int,
+                 sample_res: int=None,
+                 activation: nn.Module=nn.ReLU,
                  resample_filter=[1,3,3,1]):
         """
             Hash Attention: 
@@ -146,6 +148,8 @@ class HashAttention(nn.Module):
                 sample_size (int): how many sampled points (locations)
                     under res max
                 head_num (int): head number
+                activation (nn.Module):  default nn.ReLU
+                sample_res (int): sample resolution if given. (default: None)
                 resample_filter (int): The low pass filter. 
                     (default: [1, 3, 3, 1])
         """
@@ -158,17 +162,19 @@ class HashAttention(nn.Module):
         self.ch = ch = table_num * 2
 
         # Randomly sample coords here.
-        coords = sample_coords(None, res_max, sample_size=sample_size,
+        sample_res = res_max if sample_res is None else sample_res
+        coords = sample_coords(None, sample_res,
+                               sample_size=sample_size,
                                single_batch=True)
         self.register_buffer('coords', coords)
 
         # Attention k, q, v
         self.multi_head_attention = MultiHeadAttention(ch,
-                                                       head_num,
+                                                       head_dim,
                                                        style_dim,
-                                                       hidden_dim=ch * head_num,
+                                                       hidden_dim=ch * 4,
                                                        out_dim=ch,
-                                                       activation=nn.LeakyReLU)
+                                                       activation=activation)
 
     def forward(self, inputs, s):
 
@@ -251,13 +257,16 @@ class StylelizedTransformerBlock(nn.Module):
                  res_min: int,
                  res_max: int,
                  block_num: int=1,
-                 activation=nn.ReLU,
-                 sample_size:int=64,
+                 activation: nn.Module=nn.ReLU,
+                 sample_size: int=64,
+                 sample_res: int=None,
                  use_layer_norm=True,
                  upsample=False,
                  use_prob_attention=False,
                  hidden_dim: int=None,
-                 shuffle_input: bool=False
+                 shuffle_input: bool=False,
+                 spatial_atten: bool=False,
+                 only_linear: bool=False
                  ):
         """
             Args:
@@ -271,10 +280,15 @@ class StylelizedTransformerBlock(nn.Module):
                     Transformer block.
                 activation: activation function. (default: nn.ReLU)
                 sample_size (int): sample size to do spatial attention.
+                sample_res (int): sample resolution if given. (default: None)
                 use_layer_norm (bool): Whether to use layer normalization in 
                     transformer. (default: False)
                 hidden_dim (int): Hidden dimension of attention. 
                 shuffle_input (bool): Whether to shuffle input according to some indices
+                spatial_atten (bool): Use spatial attention or not. 
+                    (default: False)
+                only_linear (bool): Only use linear operation in this block, 
+                    no attention block is applied.
         """
         super().__init__()
         self.feat_dim = feat_dim
@@ -286,11 +300,14 @@ class StylelizedTransformerBlock(nn.Module):
         self.res_min = res_min
         self.res_max = res_max
         self.sample_size = sample_size # Not used for now
+        self.sample_res = sample_res
         self.shuffle_input = shuffle_input
         self.activation = activation
         self.use_layer_norm = use_layer_norm
         self.use_prob_attention = use_prob_attention
         self.hidden_dim = hidden_dim
+        self.spatial_atten = spatial_atten
+        self.only_linear = only_linear
 
         if shuffle_input:
             random_indices = get_shuffle_table_indices(table_num, feat_dim)
@@ -302,28 +319,57 @@ class StylelizedTransformerBlock(nn.Module):
         self.t_blocks = nn.ModuleList()
         self.l_layers = nn.ModuleList()
         for _ in range(self.block_num):
-            self.t_blocks.append(MultiHeadAttention(
-                self.feat_dim,
-                self.head_dim,
-                self.s_dim,
-                hidden_dim=self.hidden_dim,
-                activation=self.activation,
-                use_prob_attention=self.use_prob_attention
-            ))
-            self.l_layers.append(ModulatedLinear(self.feat_dim,
-                                                 self.feat_dim,
-                                                 self.s_dim,
-                                                 activation=self.activation))
+            if self.only_linear: t_block = nn.Identity();
+            else:
+                if not self.spatial_atten:
+                    t_block = MultiHeadAttention(
+                        self.feat_dim,
+                        self.head_dim,
+                        self.s_dim,
+                        hidden_dim=self.hidden_dim,
+                        activation=self.activation,
+                        use_prob_attention=self.use_prob_attention)
+                else:
+                    t_block = HashAttention(self.table_num,
+                                            self.res_min,
+                                            self.sample_res,
+                                            self.s_dim,
+                                            self.sample_size,
+                                            self.head_dim,
+                                            sample_res=self.sample_res,
+                                            activation=self.activation)
+                    
+            self.t_blocks.append(t_block)
+            self.l_layers.append(
+                StackedModulatedMLP(self.feat_dim,
+                                    self.feat_dim,
+                                    self.feat_dim,
+                                    self.s_dim,
+                                    2,
+                                    in_activ=nn.LeakyReLU,
+                                    out_activ=nn.Identity)
+            )
             
 
-    def forward(self, x: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+    def forward(self,
+                x: torch.Tensor,
+                s1: torch.Tensor,
+                s2: torch.Tensor) -> torch.Tensor:
+        """
+            Args:
+                x: input hash table. B x N x C
+                s1: style code across the table
+                s2: style code along the table
+        """
+
         batch_size = x.size(0)
         if self.shuffle_input:
             x = torch.gather(x, -1, self.random_indices.repeat(batch_size, 1, 1))
         # Shuffle within hash tables
         for t, l in zip(self.t_blocks, self.l_layers):
-            x = F.layer_norm(t(x, s) + x, (self.feat_dim,))
-            x = F.layer_norm(l(x, s) + x, (self.feat_dim,))
+            if not self.only_linear:
+                x = F.layer_norm(t(x, s1) + x, (self.feat_dim,))
+            x = F.layer_norm(l(x, s2) + x, (self.feat_dim,))
         return x
         
     
