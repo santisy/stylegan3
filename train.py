@@ -181,6 +181,9 @@ def parse_comma_separated_list(s):
 @click.option('--shuffle_input', help='Shuffle the input accoridng to random indices',          type=bool, default=False, show_default=True)
 @click.option('--spatial_atten', help='Spatial attention or not.',                              type=bool, default=False, show_default=True)
 @click.option('--two_style_code',   help='Using two stylecode or not.',                         type=bool, default=False, show_default=True)
+@click.option('--tokenwise_linear', help='Use token wise linear or not.',                       type=bool, default=False, show_default=True)
+@click.option('--shrink_down', help='Whether to shrink it down or not.',                        type=bool, default=False, show_default=True)
+@click.option('--no_norm_layer', help='No normalization layer.',                                type=bool, default=False, show_default=True)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -227,6 +230,9 @@ def main(**kwargs):
                                  shuffle_input=opts.shuffle_input,
                                  spatial_atten=opts.spatial_atten,
                                  two_style_code=opts.two_style_code,
+                                 tokenwise_linear=opts.tokenwise_linear,
+                                 shrink_down=opts.shrink_down,
+                                 no_norm_layer=opts.no_norm_layer,
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)

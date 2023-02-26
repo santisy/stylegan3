@@ -36,6 +36,9 @@ class HashTableGenerator(nn.Module):
                  output_skip: bool=True,
                  shuffle_input: bool=False,
                  spatial_atten: bool=False,
+                 tokenwise_linear: bool=False,
+                 no_norm_layer: bool=False,
+                 shrink_down: bool=False,
                  ):
         """
             Args:
@@ -58,6 +61,11 @@ class HashTableGenerator(nn.Module):
                 shuffle_input (bool): shuffle input of each block according to 
                     indices (default: False)
                 spatial_atten (bool): Spatial attention or not. (default: False)
+                tokenwise_linear (bool): If we use tokenwise linear or not.
+                    (default: False)
+                no_norm_layer (bool): No normalization layer.
+                    (default: False)
+                shrink_down (bool): If shrink down arch (default=False)
         """
         super(HashTableGenerator, self).__init__()
 
@@ -76,22 +84,29 @@ class HashTableGenerator(nn.Module):
         self.output_skip = output_skip
         self.shuffle_input = shuffle_input
         self.spatial_atten= spatial_atten
+        self.tokenwise_linear = tokenwise_linear
+        self.no_norm_layer = no_norm_layer
+        self.shrink_down = shrink_down
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
         self.levels = int(self.table_size_log2 - np.log2(self.init_dim))
         self.data_dim = 2 # Is this a 2D data or 3D data
 
         self.b_res = np.exp((np.log(res_max) - np.log(res_min)) / (self.levels))
 
+        self.token_num = token_num = table_num if not shrink_down else int(2 ** table_size_log2)
+        token_dim = self.init_dim if not shrink_down else table_num
         # NOTE: we forcefully set 
         self.register_buffer('pos_encoding',
-                             sinuous_pos_encode(table_num,
-                                                self.init_dim))
+                             sinuous_pos_encode(token_num, token_dim))
         self._build_layers()
         dprint('Finished building hash table generator.', color='g')
 
     @property
     def s_num(self) -> int:
-        return self.levels + 3
+        s_num = self.levels + 3
+        if self.output_skip:
+            s_num = s_num * 2
+        return s_num
 
     def _build_layers(self) -> None:
         """This is where to put layer building."""
@@ -104,14 +119,17 @@ class HashTableGenerator(nn.Module):
             # The dimension for a single head remains constant
             nhead_now = max(dim_now // head_dim_now, 1)
             # Use the dim_now to compute block_num and sample_size
-            block_num = 2
+            block_num = 3 if not self.shrink_down else 1
             # Sample size and sample res
             sample_size = min(dim_now // 2, 128)
-            sample_res = int(self.res_min * self.b_res ** i)
+            sample_res = int(np.ceil(self.res_min * self.b_res ** i))
+            # If shrink down the table_num (token_num) will change
+            token_num_now = (self.table_num if not self.shrink_down
+                                else int(self.token_num / (2 ** i)))
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
                                                          head_dim_now,
-                                                         self.table_num,
+                                                         token_num_now,
                                                          self.style_dim,
                                                          self.res_min,
                                                          self.res_max,
@@ -123,8 +141,15 @@ class HashTableGenerator(nn.Module):
                                                          spatial_atten=self.spatial_atten,
                                                          sample_size=sample_size,
                                                          sample_res=sample_res,
+                                                         tokenwise_linear=self.tokenwise_linear,
+                                                         no_norm_layer=self.no_norm_layer, 
                                                          only_linear=False)
             setattr(self, f'transformer_block_{i}', transform_block)
+            if self.output_skip:
+                setattr(self, f'hashside_out_{i}',
+                        HashSideOut(self.res_min, sample_res, token_num_now,
+                                    self.style_dim
+                                    ))
 
     def freeze_until_level(self, freeze_level)-> None:
         for i in range(freeze_level):
@@ -149,22 +174,36 @@ class HashTableGenerator(nn.Module):
         x = self.pos_encoding.repeat(b, 1, 1)
 
         # Transformers following
+        out = None
         for i in range(self.levels+1):
             x = getattr(self, f'transformer_block_{i}')(x,
                                                         next(s1_iter),
                                                         next(s2_iter))
+            if self.output_skip:
+                x_out = getattr(self, f'hashside_out_{i}')(x, next(s1_iter))
+                if out is not None: 
+                    out = F.interpolate(out, (x_out.size(2), x_out.size(3)),
+                                        mode='bilinear') + x_out
+                else:
+                    out = x_out
+
             # Upscale or output
             if i != self.levels:
                 # Upscale as concat
-                x = torch.cat((x, x), dim=-1)
-            else:
+                if not self.shrink_down:
+                    x = torch.cat((x, x), dim=-1)
+                else:
+                    x = x.reshape(b, x.size(1) // 2, 2, -1)
+                    x = x.reshape(b, x.size(1), -1)
+            elif not self.output_skip:
                 out = x
 
-        hash_tables = out.reshape(out.shape[0], out.shape[1],
-                                  out.shape[2] // self.F,
-                                  self.F)
+        if not self.output_skip:
+            out = out.reshape(out.shape[0], out.shape[1],
+                                    out.shape[2] // self.F,
+                                    self.F)
 
-        return hash_tables
+        return out
 
 
 

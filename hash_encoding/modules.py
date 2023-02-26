@@ -2,6 +2,7 @@
 Modules for generating hash tables
 """
 import math
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ import torch.nn.functional as F
 from torch_utils.ops import bias_act
 from training.networks_stylegan2 import FullyConnectedLayer
 from training.networks_stylegan2 import modulated_conv2d
+from training.networks_stylegan2 import SynthesisLayer
 
 from hash_encoding.layers import ModulatedLinear
 from hash_encoding.layers import TokenWiseModulatedLinear
@@ -157,32 +159,42 @@ class HashAttention(nn.Module):
         self.res_min = res_min
         self.res_max = res_max
         self.sample_size = sample_size
+        self.sample_res = sample_res
 
         # The `2` here is the entry length in hash tables
         self.ch = ch = table_num * 2
 
         # Randomly sample coords here.
         sample_res = res_max if sample_res is None else sample_res
-        coords = sample_coords(None, sample_res,
-                               sample_size=sample_size,
-                               single_batch=True)
+        coords = sample_coords(None, sample_res, single_batch=True)
         self.register_buffer('coords', coords)
 
-        # Attention k, q, v
-        self.multi_head_attention = MultiHeadAttention(ch,
-                                                       head_dim,
-                                                       style_dim,
-                                                       hidden_dim=ch * 4,
-                                                       out_dim=ch,
-                                                       activation=activation)
+        self.conv1 = SynthesisLayer(self.ch,
+                                    self.ch * 4,
+                                    style_dim,
+                                    sample_res,
+                                    kernel_size=3,
+                                    up=1,
+                                    use_noise=False,
+                                    resample_filter=None,
+                                    activation='lrelu',
+                                    )
+        self.conv2 = SynthesisLayer(self.ch * 4,
+                                    self.ch, 
+                                    style_dim,
+                                    sample_res,
+                                    kernel_size=3,
+                                    up=1,
+                                    use_noise=False,
+                                    resample_filter=None,
+                                    activation='linear')
 
     def forward(self, inputs, s):
 
-        batch_size = inputs.shape[0]
-        device = inputs.device
+        batch_size = inputs.size(0)
         # The `2` here is the entry length in hash tables
-        table_dim = inputs.shape[2] // 2
-        table_num = inputs.shape[1]
+        table_dim = inputs.size(2) // 2
+        table_num = inputs.size(1)
         hash_tables = inputs.reshape(batch_size, table_num, table_dim, 2)
         coords = self.coords.repeat(batch_size, 1, 1)
 
@@ -192,11 +204,14 @@ class HashAttention(nn.Module):
                                                        self.res_min,
                                                        self.res_max)
 
-        # Self attention
-        tokenize_tensor = hash_retrieved_feats
-        tokenize_tensor = F.layer_norm(
-            self.multi_head_attention(tokenize_tensor, s) + tokenize_tensor,
-            [self.ch])
+        block_tensor = hash_retrieved_feats.reshape(batch_size, self.sample_res,
+                                                    self.sample_res, self.ch
+                                                    ).permute(0, 3, 1, 2)
+
+        block_tensor = self.conv1(block_tensor, s) 
+        block_tensor = self.conv2(block_tensor, s)
+        tokenize_tensor = block_tensor.reshape(batch_size, self.ch, -1
+                                               ).permute(0, 2, 1).contiguous()
         
         # Recon the hash tables
         recon_hash_tables = HashTableRecon.apply(tokenize_tensor,
@@ -211,8 +226,10 @@ class HashAttention(nn.Module):
 class StackedModulatedMLP(nn.Module):
     def __init__(self, in_ch: int, h_ch: int, out_ch: int, s_dim: int,
                  n_layers: int,
-                 in_activ=nn.ReLU,
-                 out_activ=nn.Tanh,
+                 table_num: int=16,
+                 in_activ: nn.Module=nn.ReLU,
+                 out_activ: nn.Module=nn.Tanh,
+                 tokenwise_linear: bool=False,
                  use_layer_norm: bool=False):
         """
             Args:
@@ -222,23 +239,28 @@ class StackedModulatedMLP(nn.Module):
                 s_dim: style code dimension
                 n_layers: how many layers of MLPs in total
                     (including input and output layers)
+                table_num (int): number of tables
                 in_activ : inside (hidden layers) activation
                 out_activ : output activation
                 norm_layer (nn.Module): if Other normalization is used
                 use_layer_norm (nn.Module): Use layer normalization
+                tokenwise_linear (bool): If tokenwise linear or not.
+                    (default: False)
         """
         super().__init__()
 
         self.module_list = nn.ModuleList()
         self.use_layer_norm = use_layer_norm
+        linear_layer = partial(ModulatedLinear, table_num=table_num) if not tokenwise_linear else \
+                        partial(TokenWiseModulatedLinear, table_num=table_num)
 
         for i in range(n_layers):
             if i == 0:
-                self.module_list.append(ModulatedLinear(in_ch, h_ch, s_dim, activation=in_activ))
+                self.module_list.append(linear_layer(in_ch, h_ch, s_dim, activation=in_activ))
             elif i == n_layers - 1:
-                self.module_list.append(ModulatedLinear(h_ch, out_ch, s_dim, activation=out_activ))
+                self.module_list.append(linear_layer(h_ch, out_ch, s_dim, activation=out_activ))
             else:
-                self.module_list.append(ModulatedLinear(h_ch, h_ch, s_dim, activation=in_activ))
+                self.module_list.append(linear_layer(h_ch, h_ch, s_dim, activation=in_activ))
 
     def forward(self, x, s):
         for m in self.module_list:
@@ -266,7 +288,9 @@ class StylelizedTransformerBlock(nn.Module):
                  hidden_dim: int=None,
                  shuffle_input: bool=False,
                  spatial_atten: bool=False,
-                 only_linear: bool=False
+                 only_linear: bool=False,
+                 tokenwise_linear: bool=False,
+                 no_norm_layer: bool=False,
                  ):
         """
             Args:
@@ -289,6 +313,10 @@ class StylelizedTransformerBlock(nn.Module):
                     (default: False)
                 only_linear (bool): Only use linear operation in this block, 
                     no attention block is applied.
+                tokenwise_linear (bool): If we use tokenwise linear or not.
+                    (default: False)
+                no_norm_layer (bool): No normalization layer.
+                    (default: False)
         """
         super().__init__()
         self.feat_dim = feat_dim
@@ -308,6 +336,8 @@ class StylelizedTransformerBlock(nn.Module):
         self.hidden_dim = hidden_dim
         self.spatial_atten = spatial_atten
         self.only_linear = only_linear
+        self.tokenwise_linear = tokenwise_linear
+        self.no_norm_layer = no_norm_layer
 
         if shuffle_input:
             random_indices = get_shuffle_table_indices(table_num, feat_dim)
@@ -319,6 +349,7 @@ class StylelizedTransformerBlock(nn.Module):
         self.t_blocks = nn.ModuleList()
         self.l_layers = nn.ModuleList()
         for _ in range(self.block_num):
+            # The attention or cross table-block
             if self.only_linear: t_block = nn.Identity();
             else:
                 if not self.spatial_atten:
@@ -338,8 +369,9 @@ class StylelizedTransformerBlock(nn.Module):
                                             self.head_dim,
                                             sample_res=self.sample_res,
                                             activation=self.activation)
-                    
             self.t_blocks.append(t_block)
+
+            # The linear or along table block
             self.l_layers.append(
                 StackedModulatedMLP(self.feat_dim,
                                     self.feat_dim,
@@ -347,7 +379,9 @@ class StylelizedTransformerBlock(nn.Module):
                                     self.s_dim,
                                     2,
                                     in_activ=nn.LeakyReLU,
-                                    out_activ=nn.Identity)
+                                    out_activ=nn.Identity,
+                                    tokenwise_linear=self.tokenwise_linear,
+                                    table_num=self.table_num)
             )
             
 
@@ -368,8 +402,10 @@ class StylelizedTransformerBlock(nn.Module):
         # Shuffle within hash tables
         for t, l in zip(self.t_blocks, self.l_layers):
             if not self.only_linear:
-                x = F.layer_norm(t(x, s1) + x, (self.feat_dim,))
-            x = F.layer_norm(l(x, s2) + x, (self.feat_dim,))
+                x = t(x, s1) + x
+                x = F.layer_norm(x, (self.feat_dim,))
+            x = l(x, s2) + x
+            x = F.layer_norm(x, (self.feat_dim,))
         return x
         
     
@@ -436,9 +472,14 @@ class HashSideOut(nn.Module):
         self.res_min = res_min
         self.res_max = res_max
 
-        self.m_linear = ModulatedLinear(table_num*2, 3, style_dim)
+        self.m_linear = StackedModulatedMLP(table_num*2, 32, 3, style_dim,
+                                            3,
+                                            in_activ=nn.ReLU,
+                                            out_activ=nn.Tanh)
+        coords = sample_coords(None, res_max, single_batch=True)
+        self.register_buffer('coords', coords)
 
-    def forward(self, x, coords, s) -> torch.Tensor:
+    def forward(self, x, s) -> torch.Tensor:
         """
             Args:
                 hash_tables: the hash tables B x H_N x H_S
@@ -448,13 +489,13 @@ class HashSideOut(nn.Module):
         b = x.shape[0]
         hash_tables = x.reshape(b, x.shape[1], x.shape[2] // 2, 2)
         hash_retrieved_feats = HashTableRetrieve.apply(hash_tables,
-                                                       coords,
+                                                       self.coords.repeat(b, 1, 1),
                                                        self.res_min,
                                                        self.res_max)
         feats = self.m_linear(hash_retrieved_feats, s)
-        if coords.shape[-1] == 2:
+        if self.coords.shape[-1] == 2:
             return feats.reshape(b, self.res_max, self.res_max, 3).permute(0, 3, 1, 2)
-        elif coords.shape[-1] == 3:
+        elif self.coords.shape[-1] == 3:
             raise NotImplementedError
         else:
             raise NotImplementedError

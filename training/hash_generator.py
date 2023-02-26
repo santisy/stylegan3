@@ -45,6 +45,9 @@ class HashGenerator(nn.Module):
                  shuffle_input: bool=False,
                  spatial_atten: bool=False,
                  two_style_code: bool=False,
+                 tokenwise_linear: bool=False,
+                 shrink_down: bool=False,
+                 no_norm_layer: bool=False,
                  **kwargs
                  ):
         """
@@ -78,8 +81,13 @@ class HashGenerator(nn.Module):
                 shuffle_input (bool): shuffle input of each block according to 
                     indices (default: False)
                 spatial_atten (bool): Spatial attention or not. (default: False)
+                tokenwise_linear (bool): If we use tokenwise linear or not.
+                    (default: False)
                 two_style_code (bool): Whether to use two separate style codes
                     for horizontal and vertical modulation.
+                shrink_down (bool): Shrink down or not of the arch.
+                    (default: False)
+                no_norm_layer (bool): No normalization layer.
         """
         super().__init__()
         self.res_min = res_min
@@ -87,6 +95,8 @@ class HashGenerator(nn.Module):
         self.img_size = img_size
         self.modulated_mini_linear = modulated_mini_linear
         self.s_avg_beta = s_avg_beta
+        self.shrink_down = shrink_down
+        self.output_skip = output_skip
 
         # Record for compability
         self.z_dim = z_dim
@@ -116,16 +126,20 @@ class HashGenerator(nn.Module):
                                         output_skip=output_skip,
                                         shuffle_input=shuffle_input,
                                         spatial_atten=spatial_atten,
+                                        tokenwise_linear=tokenwise_linear,
+                                        no_norm_layer=no_norm_layer,
+                                        shrink_down =shrink_down
                                         )
 
         #TODO: substitue this to mini-mlp?
         # Mini linear for resolve hash collision
-        self.mini_linear = StackedModulatedMLP(table_num * 2,
-                                            mlp_hidden,
-                                            mlp_out_dim,
-                                            style_dim,
-                                            3,
-                                            use_layer_norm=False)
+        if not output_skip:
+            self.mini_linear = StackedModulatedMLP(table_num * 2,
+                                                mlp_hidden,
+                                                mlp_out_dim,
+                                                style_dim,
+                                                3,
+                                                use_layer_norm=False)
 
 
         self.register_buffer('s_avg', torch.zeros([style_dim]))
@@ -211,9 +225,10 @@ class HashGenerator(nn.Module):
         ## Getting hash tables
         # The output size of the hash_tables is 
         #   B x H_N (table_num) x H_S (2 ** table_size_log2 // 2) x 2
-        hash_tables = self.hash_table_generator(s1, s2, z)
-        out = self._hash_and_render_out(hash_tables, s1, sample_size=sample_size)
-
+        out = self.hash_table_generator(s1, s2, z)
+        # If output skip, then no need to hash out again.
+        if not self.output_skip:
+            out = self._hash_and_render_out(out, s1, sample_size=sample_size)
         return out
 
 

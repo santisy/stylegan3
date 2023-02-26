@@ -5,9 +5,9 @@ import torch.nn.functional as F
 from training.networks_stylegan2 import FullyConnectedLayer
 
 class ModulatedLinear(nn.Module):
-    def __init__(self, in_ch, out_ch, s_dim,
-                 activation=None,
-                 bias=True):
+    def __init__(self, in_ch: int, out_ch: int, s_dim: int,
+                 activation: nn.Module=None,
+                 bias: bool=True, **kwargs):
         super().__init__()
         weight = nn.Parameter(torch.randn(out_ch, in_ch))
         self.register_parameter('weight', weight)
@@ -52,9 +52,10 @@ class ModulatedLinear(nn.Module):
 
 
 class TokenWiseModulatedLinear(nn.Module):
-    def __init__(self, in_ch, out_ch, table_num, s_dim,
-                 activation=None,
-                 bias=True):
+    def __init__(self, in_ch: int, out_ch: int, s_dim: int,
+                 table_num: int=16,
+                 activation: nn.Module=None,
+                 bias: bool=True):
         """
             Args:
                 in_ch: input channel (has not been divided 2)
@@ -81,20 +82,19 @@ class TokenWiseModulatedLinear(nn.Module):
         else:
             self.activ = None
 
-        self.s_mapping = FullyConnectedLayer(s_dim, table_num, bias_init=1)
+        self.s_mapping = FullyConnectedLayer(s_dim, in_ch, bias_init=1)
 
     def forward(self, x, s):
         batch_size = x.shape[0]
-        table_num = x.shape[1]
 
         s = self.s_mapping(s)
 
         weight = self.weight  # table_num x O x I
-        w = weight.unsqueeze(dim=0)
-        w =  w * s.reshape(batch_size, -1, 1, 1)
+        w = weight.unsqueeze(dim=0) # 1 x table_num x O x I
+        w =  w * s.reshape(batch_size, 1, 1, -1)
         decoefs = (w.square().sum(dim=[3]) + 1e-8).rsqrt() # B x table_num x O
 
-        x = x * s.reshape(batch_size, -1, 1)
+        x = x * s.reshape(batch_size, 1, -1)
         x = torch.einsum('noc,bnc->bno', weight, x).contiguous()
         x = x * decoefs
 
