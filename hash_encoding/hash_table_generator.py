@@ -116,93 +116,51 @@ class HashTableGenerator(nn.Module):
         for i in range(self.levels + 1):
             dim_now = int(input_dim * 2 ** i)
             head_dim_now = min(dim_now, self.head_dim)
-            # The dimension for a single head remains constant
-            nhead_now = max(dim_now // head_dim_now, 1)
             # Use the dim_now to compute block_num and sample_size
             block_num = 3 if not self.shrink_down else 1
-            # Sample size and sample res
-            sample_size = min(dim_now // 2, 128)
-            sample_res = int(np.ceil(self.res_min * self.b_res ** i))
-            # If shrink down the table_num (token_num) will change
-            token_num_now = (self.table_num if not self.shrink_down
-                                else int(self.token_num / (2 ** i)))
             # Every transformer block has 2 transform layers
             transform_block = StylelizedTransformerBlock(dim_now,
                                                          head_dim_now,
-                                                         token_num_now,
+                                                         self.table_num,
                                                          self.style_dim,
-                                                         self.res_min,
-                                                         self.res_max,
                                                          block_num=block_num,
                                                          hidden_dim=dim_now,
                                                          activation=nn.ReLU,
-                                                         shuffle_input=self.shuffle_input,
-                                                         use_prob_attention=False,
-                                                         spatial_atten=self.spatial_atten,
-                                                         sample_size=sample_size,
-                                                         sample_res=sample_res,
-                                                         tokenwise_linear=self.tokenwise_linear,
-                                                         no_norm_layer=self.no_norm_layer, 
-                                                         only_linear=False)
+                                                         shuffle_input=self.shuffle_input)
             setattr(self, f'transformer_block_{i}', transform_block)
-            if self.output_skip:
-                setattr(self, f'hashside_out_{i}',
-                        HashSideOut(self.res_min, sample_res, token_num_now,
-                                    self.style_dim
-                                    ))
 
     def freeze_until_level(self, freeze_level)-> None:
         for i in range(freeze_level):
             getattr(self, f'transformer_block_{i}').requires_grad_(False)
     
     def forward(self,
-                s1: torch.Tensor,
-                s2: torch.Tensor,
+                s: torch.Tensor,
                 z: torch.Tensor) -> torch.Tensor:
         """
             Args:
-                s1 (torch.Tensor): B x N_S x S_DIM (The W, the mapped style code)
-                s2 (torch.Tensor): possible additional style code
+                s (torch.Tensor): B x N x S_DIM, N is the table_num
             Return:
                 hash_tables (torch.Tensor): B x H_N x H_S x (F=2)
                 out_level (int): If not None, the level will return at out_level
                     and only train out_level + 1
         """
-        b = s1.size(0)
-        s1_iter = iter(s1.unbind(dim=1)) # The across table one
-        s2_iter = iter(s2.unbind(dim=1)) # THe along table one
+        b = s.size(0)
         x = self.pos_encoding.repeat(b, 1, 1)
 
         # Transformers following
         out = None
         for i in range(self.levels+1):
-            x = getattr(self, f'transformer_block_{i}')(x,
-                                                        next(s1_iter),
-                                                        next(s2_iter))
-            if self.output_skip:
-                x_out = getattr(self, f'hashside_out_{i}')(x, next(s1_iter))
-                if out is not None: 
-                    out = F.interpolate(out, (x_out.size(2), x_out.size(3)),
-                                        mode='bilinear') + x_out
-                else:
-                    out = x_out
+            x = getattr(self, f'transformer_block_{i}')(x, s)
 
             # Upscale or output
             if i != self.levels:
-                # Upscale as concat
-                if not self.shrink_down:
-                    x = torch.cat((x, x), dim=-1)
-                else:
-                    x = x.reshape(b, x.size(1) // 2, 2, -1)
-                    x = x.reshape(b, x.size(1), -1)
-            elif not self.output_skip:
+                x = torch.cat((x, x), dim=-1)
+            else:
                 out = x
 
-        if not self.output_skip:
-            out = out.reshape(out.shape[0], out.shape[1],
-                                    out.shape[2] // self.F,
-                                    self.F)
-
+        out = out.reshape(out.shape[0], out.shape[1],
+                          out.shape[2] // self.F,
+                          self.F)
         return out
 
 

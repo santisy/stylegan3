@@ -12,9 +12,9 @@ from torch_utils import persistence
 from hash_encoding import HashTableGenerator
 from hash_encoding.layers import ModulatedLinear
 from hash_encoding.modules import StackedModulatedMLP
-from hash_encoding.other_networks import MappingNetwork
 from hash_retrieve_module import HashTableRetrieve
 from training.networks_stylegan2 import FullyConnectedLayer
+from utils.utils import sinuous_pos_encode
 from utils.utils import sample_coords
 from utils.utils import render
 
@@ -97,18 +97,22 @@ class HashGenerator(nn.Module):
         self.s_avg_beta = s_avg_beta
         self.shrink_down = shrink_down
         self.output_skip = output_skip
+        self.table_num = table_num
 
         # Record for compability
         self.z_dim = z_dim
         self.c_dim = c_dim
 
         # The s_mapping network
-        self.s_mapping = MappingNetwork(in_ch=z_dim,
-                                        map_depth=map_depth,
-                                        style_dim=style_dim,
-                                        hidden_ch=style_dim,
-                                        use_layer_norm=use_layer_norm,
-                                        two_style_code=two_style_code)
+        assert z_dim == style_dim
+        transformer_encoder_layer = nn.TransformerEncoderLayer(style_dim, 
+                                                               nhead=4,
+                                                               dim_feedforward=style_dim*2,
+                                                               batch_first=True)
+        self.s_mapping = nn.TransformerEncoder(transformer_encoder_layer,
+                                               map_depth)
+        self.register_buffer('pos_encoding',
+                             sinuous_pos_encode(table_num, z_dim))
 
         # The hash table generator based on style
         self.hash_table_generator = HashTableGenerator(
@@ -133,13 +137,18 @@ class HashGenerator(nn.Module):
 
         #TODO: substitue this to mini-mlp?
         # Mini linear for resolve hash collision
-        if not output_skip:
-            self.mini_linear = StackedModulatedMLP(table_num * 2,
-                                                mlp_hidden,
-                                                mlp_out_dim,
-                                                style_dim,
-                                                3,
-                                                use_layer_norm=False)
+        self.mini_linear = nn.Sequential(nn.Linear(self.table_num * 2, 64),
+                                         nn.LeakyReLU(),
+                                         nn.LayerNorm(64),
+                                         nn.Linear(64, 64),
+                                         nn.LeakyReLU(),
+                                         nn.LayerNorm(64),
+                                         nn.Linear(64, 64),
+                                         nn.LeakyReLU(),
+                                         nn.LayerNorm(64),
+                                         nn.Linear(64, 3),
+                                         nn.Tanh()
+                                         ) 
 
 
         self.register_buffer('s_avg', torch.zeros([style_dim]))
@@ -178,20 +187,13 @@ class HashGenerator(nn.Module):
 
     def mapping(self, z, c=None, update_emas=False, truncation_psi=1, **kwargs) -> torch.Tensor:
         # Main MLPs
-        s1, s2 = self.s_mapping(z)
+        b = z.size(0)
+        z = z.unsqueeze(dim=1) + self.pos_encoding.repeat(b, 1, 1)
+        s = self.s_mapping(z)
+        
+        return s # B x N x S_DIM
 
-        ## Update EMAs
-        #if update_emas:
-        #    self.s_avg.copy_(s.detach().mean(dim=0).lerp(self.s_avg, self.s_avg_beta))
-
-        ## Apply truncation
-        #if truncation_psi != 1:
-        #    s = self.s_avg.lerp(s, truncation_psi)
-
-        return (s1.unsqueeze(dim=1).repeat([1, self.hash_table_generator.s_num, 1]),
-                s2.unsqueeze(dim=1).repeat([1, self.hash_table_generator.s_num, 1]))
-
-    def _hash_and_render_out(self, hash_tables, s, sample_size=None):
+    def _hash_and_render_out(self, hash_tables, sample_size=None):
         # Retrieve from hash tables according to coordinates
         # The output size of retrieved feature is
         #   B x N x (table_num * F), value range [0, 1]
@@ -202,21 +204,19 @@ class HashGenerator(nn.Module):
                                                          coords,
                                                          self.res_min,
                                                          self.res_max)
-        mlp_out = self.mini_linear(hash_retrieved_feature, s[:, -1]) # B x N x OUT_DIM
+        mlp_out = self.mini_linear(hash_retrieved_feature) # B x N x OUT_DIM
         ## Rendering
         out = self._render(mlp_out, sample_size)
         return out
 
     def synthesis(self,
-                  s1: torch.Tensor,
-                  s2: torch.Tensor,
+                  s: torch.Tensor,
                   z: torch.Tensor,
                   update_emas: bool=False,
                   sample_size: int=None) -> torch.Tensor:
         """
             Args:
-                s1: is the repeated fashion, for the stylemixing regularization
-                s2: possible additional style.
+                s: style tokens
                 out_level (int): If not None, the level will return at out_level
                     and only train out_level + 1
                 linear_fuse_ration (float): If None, then we would fuse the 
@@ -225,10 +225,10 @@ class HashGenerator(nn.Module):
         ## Getting hash tables
         # The output size of the hash_tables is 
         #   B x H_N (table_num) x H_S (2 ** table_size_log2 // 2) x 2
-        out = self.hash_table_generator(s1, s2, z)
+        out = self.hash_table_generator(s, z)
         # If output skip, then no need to hash out again.
         if not self.output_skip:
-            out = self._hash_and_render_out(out, s1, sample_size=sample_size)
+            out = self._hash_and_render_out(out, sample_size=sample_size)
         return out
 
 
@@ -238,8 +238,8 @@ class HashGenerator(nn.Module):
                 z: B x Z_DIM
         """
         # The style mapping
-        s1, s2 = self.mapping(z, c)
-        img = self.synthesis(s1, s2, z, update_emas=update_emas)
+        s = self.mapping(z, c)
+        img = self.synthesis(s, z, update_emas=update_emas)
         return img
 
 

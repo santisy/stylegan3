@@ -22,38 +22,37 @@ from utils.utils import get_shuffle_table_indices
 from utils.utils import render
 from utils.utils import sample_coords
 
-
 class MultiHeadAttention(nn.Module):
-    def __init__(self, feat_dim: int, head_dim: int, s_dim: int,
-                 use_prob_attention: bool=False,
+    def __init__(self, feat_dim: int,
+                 head_dim: int,
                  hidden_dim: int=None,
+                 v_dim: int=None,
                  out_dim: int=None,
                  activation=nn.Identity):
         """
+            Compatible with cross-attention
             Args:
-                feat_dim: The token dimension of the input
+                feat_dim: The token dimension of the input (query dimension)
                 head_num: The head number
                 s_dim: style mapping size
                 hidden_dim: hidden dimension
                 out_dim: out dimension
+                v_dim (int): value dimension
                 activation: possible activation function
         """
         super().__init__()
         self.feat_dim = feat_dim
-        self.s_dim = s_dim
         self.hidden_dim = feat_dim if hidden_dim is None else hidden_dim
         self.out_dim = feat_dim if out_dim is None else out_dim
         self.head_dim = head_dim
         self.head_num = self.hidden_dim // head_dim
+        v_dim = feat_dim if v_dim is None else v_dim
 
-        self.k_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
-        self.q_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
-        self.v_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim,
-                                         activation=activation)
-        self.o_mapping = ModulatedLinear(self.hidden_dim, self.out_dim, s_dim)
-        self.use_prob_attention = use_prob_attention
-        if use_prob_attention:
-            self.prob_atten = ProbAttention(mask_flag=False, factor=5)
+        self.k_mapping = nn.Linear(v_dim, self.hidden_dim)
+        self.v_mapping = nn.Linear(v_dim, self.hidden_dim)
+
+        self.q_mapping = nn.Linear(feat_dim, self.hidden_dim)
+        self.o_mapping = nn.Linear(self.hidden_dim, self.out_dim)
 
     def _resize_head_to_batch(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -102,25 +101,21 @@ class MultiHeadAttention(nn.Module):
         """
             Args:
                 x: B x N x FEAT_DIM
-                s: B x S_DIM
+                s: the vk from latent vector
         """
         batch_size = x.size(0)
         token_num = x.size(1)
 
         # (B x H) x N x C
-        k = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
-        q = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
-        v = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        k = self.k_mapping(s).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        v = self.v_mapping(s).reshape(batch_size, token_num, self.head_num, self.head_dim)
 
-        if not self.use_prob_attention:
-            out = self._resize_head_back(self._scaled_dot_product_attention(k, q, v),
-                                        batch_size,
-                                        token_num)
-        else:
-            out = self.prob_atten(q, k, v, None)[0]
-            out = out.reshape(batch_size, token_num, -1)
-        
-        out = self.o_mapping(out, s)
+        q = self.q_mapping(x).reshape(batch_size, token_num, self.head_num, self.head_dim)
+
+        out = self._resize_head_back(self._scaled_dot_product_attention(q, k, v),
+                                     batch_size,
+                                     token_num)
+        out = self.o_mapping(out)
 
         return out
 
@@ -276,8 +271,6 @@ class StylelizedTransformerBlock(nn.Module):
                  head_dim: int,
                  table_num: int,
                  s_dim: int,
-                 res_min: int,
-                 res_max: int,
                  block_num: int=1,
                  activation: nn.Module=nn.ReLU,
                  sample_size: int=64,
@@ -325,8 +318,6 @@ class StylelizedTransformerBlock(nn.Module):
         self.s_dim = s_dim
         self.block_num = block_num
         self.upsample = upsample
-        self.res_min = res_min
-        self.res_max = res_max
         self.sample_size = sample_size # Not used for now
         self.sample_res = sample_res
         self.shuffle_input = shuffle_input
@@ -334,8 +325,6 @@ class StylelizedTransformerBlock(nn.Module):
         self.use_layer_norm = use_layer_norm
         self.use_prob_attention = use_prob_attention
         self.hidden_dim = hidden_dim
-        self.spatial_atten = spatial_atten
-        self.only_linear = only_linear
         self.tokenwise_linear = tokenwise_linear
         self.no_norm_layer = no_norm_layer
 
@@ -346,65 +335,58 @@ class StylelizedTransformerBlock(nn.Module):
         self._build_blocks()
 
     def _build_blocks(self):
+        self.c_blocks = nn.ModuleList()
         self.t_blocks = nn.ModuleList()
         self.l_layers = nn.ModuleList()
         for _ in range(self.block_num):
-            # The attention or cross table-block
-            if self.only_linear: t_block = nn.Identity();
-            else:
-                if not self.spatial_atten:
-                    t_block = MultiHeadAttention(
-                        self.feat_dim,
-                        self.head_dim,
-                        self.s_dim,
-                        hidden_dim=self.hidden_dim,
-                        activation=self.activation,
-                        use_prob_attention=self.use_prob_attention)
-                else:
-                    t_block = HashAttention(self.table_num,
-                                            self.res_min,
-                                            self.sample_res,
-                                            self.s_dim,
-                                            self.sample_size,
-                                            self.head_dim,
-                                            sample_res=self.sample_res,
-                                            activation=self.activation)
+            # Cross attention
+            c_block = MultiHeadAttention(
+                self.feat_dim,
+                self.head_dim,
+                hidden_dim=self.hidden_dim,
+                activation=self.activation,
+                v_dim=self.s_dim)
+            self.c_blocks.append(c_block)
+
+            # Self attention (cross table)
+            t_block = MultiHeadAttention(
+                self.feat_dim,
+                self.head_dim,
+                hidden_dim=self.hidden_dim,
+                activation=self.activation)
             self.t_blocks.append(t_block)
 
             # The linear or along table block
             self.l_layers.append(
-                StackedModulatedMLP(self.feat_dim,
-                                    self.feat_dim,
-                                    self.feat_dim,
-                                    self.s_dim,
-                                    2,
-                                    in_activ=nn.LeakyReLU,
-                                    out_activ=nn.Identity,
-                                    tokenwise_linear=self.tokenwise_linear,
-                                    table_num=self.table_num)
+                nn.Sequential(nn.Linear(self.feat_dim, self.feat_dim * 2),
+                              self.activation(),
+                              nn.Linear(self.feat_dim * 2, self.feat_dim)) 
             )
             
 
     def forward(self,
                 x: torch.Tensor,
-                s1: torch.Tensor,
-                s2: torch.Tensor) -> torch.Tensor:
+                s: torch.Tensor,
+                ) -> torch.Tensor:
         """
             Args:
                 x: input hash table. B x N x C
-                s1: style code across the table
-                s2: style code along the table
+                s: style code across the table
         """
 
         batch_size = x.size(0)
         if self.shuffle_input:
             x = torch.gather(x, -1, self.random_indices.repeat(batch_size, 1, 1))
         # Shuffle within hash tables
-        for t, l in zip(self.t_blocks, self.l_layers):
-            if not self.only_linear:
-                x = t(x, s1) + x
-                x = F.layer_norm(x, (self.feat_dim,))
-            x = l(x, s2) + x
+        for t, c, l in zip(self.t_blocks, self.c_blocks, self.l_layers):
+            # Self attention
+            x = t(x, x) + x
+            x = F.layer_norm(x, (self.feat_dim,))
+            # Cross attention
+            x = c(x, s) + x
+            x = F.layer_norm(x, (self.feat_dim,))
+            # Linear
+            x = l(x) + x
             x = F.layer_norm(x, (self.feat_dim,))
         return x
         
