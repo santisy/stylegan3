@@ -109,11 +109,11 @@ class MultiHeadAttention(nn.Module):
 
         # (B x H) x N x C
         k = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
-        q = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
-        v = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        q = self.q_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        v = self.v_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
 
         if not self.use_prob_attention:
-            out = self._resize_head_back(self._scaled_dot_product_attention(k, q, v),
+            out = self._resize_head_back(self._scaled_dot_product_attention(q, k, v),
                                         batch_size,
                                         token_num)
         else:
