@@ -119,7 +119,7 @@ class HashTableGenerator(nn.Module):
             # The dimension for a single head remains constant
             nhead_now = max(dim_now // head_dim_now, 1)
             # Use the dim_now to compute block_num and sample_size
-            block_num = 3 if not self.shrink_down else 1
+            block_num = 2 if not self.shrink_down else 1
             # Sample size and sample res
             sample_size = min(dim_now // 2, 128)
             sample_res = int(np.ceil(self.res_min * self.b_res ** i))
