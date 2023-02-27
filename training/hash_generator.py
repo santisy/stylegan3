@@ -98,21 +98,28 @@ class HashGenerator(nn.Module):
         self.shrink_down = shrink_down
         self.output_skip = output_skip
         self.table_num = table_num
+        self.style_dim = style_dim
 
         # Record for compability
         self.z_dim = z_dim
         self.c_dim = c_dim
 
         # The s_mapping network
-        assert z_dim == style_dim
-        transformer_encoder_layer = nn.TransformerEncoderLayer(style_dim, 
-                                                               nhead=4,
-                                                               dim_feedforward=style_dim*2,
-                                                               batch_first=True)
-        self.s_mapping = nn.TransformerEncoder(transformer_encoder_layer,
-                                               map_depth)
-        self.register_buffer('pos_encoding',
-                             sinuous_pos_encode(table_num, z_dim))
+        inter_dim = table_num * style_dim
+        self.s_mapping = nn.Sequential(
+            nn.Linear(z_dim, inter_dim),
+            nn.LeakyReLU(),
+            nn.LayerNorm(inter_dim),
+            nn.Linear(inter_dim, inter_dim),
+            nn.LeakyReLU(),
+            nn.LayerNorm(inter_dim),
+            nn.Linear(inter_dim, inter_dim),
+            nn.LeakyReLU(),
+            nn.LayerNorm(inter_dim),
+            nn.Linear(inter_dim, inter_dim),
+            nn.LeakyReLU(),
+            nn.LayerNorm(inter_dim),
+        )
 
         # The hash table generator based on style
         self.hash_table_generator = HashTableGenerator(
@@ -188,8 +195,8 @@ class HashGenerator(nn.Module):
     def mapping(self, z, c=None, update_emas=False, truncation_psi=1, **kwargs) -> torch.Tensor:
         # Main MLPs
         b = z.size(0)
-        z = z.unsqueeze(dim=1) + self.pos_encoding.repeat(b, 1, 1)
         s = self.s_mapping(z)
+        s = s.reshape(b, self.table_num, self.style_dim)
         
         return s # B x N x S_DIM
 
