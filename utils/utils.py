@@ -81,3 +81,9 @@ def render(x: torch.Tensor, img_size: int):
                         img_size,
                         img_size,
                         -1).permute(0, 3, 1, 2)
+
+def smooth_ceiling(x, gamma=0.99):
+    return x - 0.5 - torch.arctan(
+                                    - gamma*torch.sin(2 * torch.pi * x)/(
+                                    1 - gamma * torch.cos(2 * torch.pi * x))
+                                ) / torch.pi

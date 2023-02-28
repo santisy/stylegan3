@@ -119,7 +119,7 @@ class HashTableGenerator(nn.Module):
             # The dimension for a single head remains constant
             nhead_now = max(dim_now // head_dim_now, 1)
             # Use the dim_now to compute block_num and sample_size
-            block_num = 2 if not self.shrink_down else 1
+            block_num = 1 if not self.shrink_down else 1
             # Sample size and sample res
             sample_size = min(dim_now // 2, 128)
             sample_res = int(np.ceil(self.res_min * self.b_res ** i))
@@ -135,7 +135,7 @@ class HashTableGenerator(nn.Module):
                                                          self.res_max,
                                                          block_num=block_num,
                                                          hidden_dim=dim_now,
-                                                         activation=nn.ReLU,
+                                                         activation=nn.GELU,
                                                          shuffle_input=self.shuffle_input,
                                                          use_prob_attention=False,
                                                          spatial_atten=self.spatial_atten,
@@ -143,7 +143,8 @@ class HashTableGenerator(nn.Module):
                                                          sample_res=sample_res,
                                                          tokenwise_linear=self.tokenwise_linear,
                                                          no_norm_layer=self.no_norm_layer, 
-                                                         only_linear=False)
+                                                         only_linear=False,
+                                                         deformable_head_num=2)
             setattr(self, f'transformer_block_{i}', transform_block)
             if self.output_skip:
                 setattr(self, f'hashside_out_{i}',

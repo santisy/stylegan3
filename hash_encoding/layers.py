@@ -30,9 +30,14 @@ class ModulatedLinear(nn.Module):
         """
             x: B x (N) x IN
             s: B x s_dim
+
         """
-        batch_size = x.shape[0]
+        batch_size = x.size(0)
         s = self.s_mapping(s)
+        # NOTE: The batch size may be different
+        s_batch_size = s.size(0)
+        if s_batch_size < batch_size:
+            s = s.repeat(batch_size // s_batch_size, 1)
 
         weight = self.weight
         w = weight.unsqueeze(dim=0) # 1 x OUT x IN

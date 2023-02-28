@@ -18,42 +18,63 @@ from hash_encoding.layers import TokenWiseModulatedLinear
 from hash_retrieve_module import HashTableRetrieve
 from hash_retrieve_module import HashTableRecon
 from hash_encoding.prob_attention import ProbAttention
+from hash_encoding.other_networks import MultiHeadOffsetNetwork
 from utils.utils import get_shuffle_table_indices
 from utils.utils import render
 from utils.utils import sample_coords
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, feat_dim: int, head_dim: int, s_dim: int,
+    def __init__(self,
+                 feat_dim: int,
+                 head_dim: int,
+                 s_dim: int,
+                 token_num: int,
                  use_prob_attention: bool=False,
                  hidden_dim: int=None,
                  out_dim: int=None,
-                 activation=nn.Identity):
+                 activation: nn.Module=nn.GELU,
+                 deformable_head_num: int=8,
+                 ):
         """
             Args:
-                feat_dim: The token dimension of the input
-                head_num: The head number
-                s_dim: style mapping size
-                hidden_dim: hidden dimension
-                out_dim: out dimension
-                activation: possible activation function
+                feat_dim (int): The token dimension of the input
+                head_num (int): The head number
+                s_dim (int): style mapping size
+                use_prob_attention (bool): Whether to use probability attention
+                    (default: False)
+                hidden_dim (int): hidden dimension
+                out_dim (int): out dimension
+                activation (nn.Module): possible activation function
+                    (default: nn.GELU)
+                deformable_flag (bool): Whether to do deformable.
+                    (default: False)
+                deformable_head_num (int): 
         """
         super().__init__()
+        self.token_num = token_num
         self.feat_dim = feat_dim
         self.s_dim = s_dim
         self.hidden_dim = feat_dim if hidden_dim is None else hidden_dim
         self.out_dim = feat_dim if out_dim is None else out_dim
         self.head_dim = head_dim
         self.head_num = self.hidden_dim // head_dim
+        self.deformable_head_num = deformable_head_num
 
         self.k_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
         self.q_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
-        self.v_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim,
-                                         activation=activation)
+        self.v_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
         self.o_mapping = ModulatedLinear(self.hidden_dim, self.out_dim, s_dim)
         self.use_prob_attention = use_prob_attention
         if use_prob_attention:
             self.prob_atten = ProbAttention(mask_flag=False, factor=5)
+
+        # Deformable Part
+        self.offset_network = MultiHeadOffsetNetwork(self.hidden_dim,
+                                                     self.feat_dim,
+                                                     token_num,
+                                                     deformable_head_num,
+                                                     activation)
 
     def _resize_head_to_batch(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -98,29 +119,49 @@ class MultiHeadAttention(nn.Module):
         out = torch.einsum('bnk,bkc->bnc', A, v) 
         return out
 
+    def _resample_tokens(self, x: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
+        """
+            Args:
+                x: B x N x C
+                offsets: # B x (DH_NUM x T) x C x 2
+        """
+        b = x.size(0)
+        c = x.size(2)
+
+        x = x.unsqueeze(dim=1).repeat(1, 1, self.deformable_head_num, 1)
+        x = F.grid_sample(x, offsets, mode='bilinear', align_corners=True) # B x 1 x (DH_NUM x T) x C
+        x = x.reshape(int(b*self.deformable_head_num), self.token_num, c)
+
+        return x
+
     def forward(self, x: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
         """
             Args:
-                x: B x N x FEAT_DIM
+                x: B x T x C
                 s: B x S_DIM
         """
-        batch_size = x.size(0)
-        token_num = x.size(1)
+        b = x.size(0)
+        q = self.q_mapping(x, s) # B x T x C'
+
+        offsets = self.offset_network(q) # B x (DH_NUM x T) x C x 2
+        x = self._resample_tokens(x, offsets) # (B x DH_NUM) x T x C
+
+        # Reshape and replicate queries
+        q = q.reshape(q.size(0), q.size(1), self.head_num, self.head_dim)
+        q = q.repeat(self.deformable_head_num, 1, 1, 1)
 
         # (B x H) x N x C
+        batch_size = x.size(0) # NOTE: The batch size here is augmented
+        token_num = x.size(1)
         k = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
-        q = self.q_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
         v = self.v_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
 
-        if not self.use_prob_attention:
-            out = self._resize_head_back(self._scaled_dot_product_attention(q, k, v),
-                                        batch_size,
-                                        token_num)
-        else:
-            out = self.prob_atten(q, k, v, None)[0]
-            out = out.reshape(batch_size, token_num, -1)
-        
+        out = self._resize_head_back(self._scaled_dot_product_attention(q, k, v),
+                                     batch_size,
+                                     token_num)
         out = self.o_mapping(out, s)
+        out = out.reshape(b, self.deformable_head_num, self.token_num, self.out_dim)
+        out = out.sum(dim=1)
 
         return out
 
@@ -135,7 +176,7 @@ class HashAttention(nn.Module):
                  sample_size: int,
                  head_dim: int,
                  sample_res: int=None,
-                 activation: nn.Module=nn.ReLU,
+                 activation: nn.Module=nn.GELU,
                  resample_filter=[1,3,3,1]):
         """
             Hash Attention: 
@@ -279,7 +320,7 @@ class StylelizedTransformerBlock(nn.Module):
                  res_min: int,
                  res_max: int,
                  block_num: int=1,
-                 activation: nn.Module=nn.ReLU,
+                 activation: nn.Module=nn.GELU,
                  sample_size: int=64,
                  sample_res: int=None,
                  use_layer_norm=True,
@@ -291,6 +332,7 @@ class StylelizedTransformerBlock(nn.Module):
                  only_linear: bool=False,
                  tokenwise_linear: bool=False,
                  no_norm_layer: bool=False,
+                 deformable_head_num: int=8,
                  ):
         """
             Args:
@@ -317,6 +359,8 @@ class StylelizedTransformerBlock(nn.Module):
                     (default: False)
                 no_norm_layer (bool): No normalization layer.
                     (default: False)
+                deformable_head_num (int): Deformable head number.
+                    (default: 8)
         """
         super().__init__()
         self.feat_dim = feat_dim
@@ -338,6 +382,7 @@ class StylelizedTransformerBlock(nn.Module):
         self.only_linear = only_linear
         self.tokenwise_linear = tokenwise_linear
         self.no_norm_layer = no_norm_layer
+        self.deformblae_head_num = deformable_head_num
 
         if shuffle_input:
             random_indices = get_shuffle_table_indices(table_num, feat_dim)
@@ -357,9 +402,10 @@ class StylelizedTransformerBlock(nn.Module):
                         self.feat_dim,
                         self.head_dim,
                         self.s_dim,
+                        self.table_num,
                         hidden_dim=self.hidden_dim,
                         activation=self.activation,
-                        use_prob_attention=self.use_prob_attention)
+                        deformable_head_num=self.deformblae_head_num)
                 else:
                     t_block = HashAttention(self.table_num,
                                             self.res_min,
@@ -378,7 +424,7 @@ class StylelizedTransformerBlock(nn.Module):
                                     self.feat_dim,
                                     self.s_dim,
                                     2,
-                                    in_activ=nn.LeakyReLU,
+                                    in_activ=self.activation,
                                     out_activ=nn.Identity,
                                     tokenwise_linear=self.tokenwise_linear,
                                     table_num=self.table_num)
