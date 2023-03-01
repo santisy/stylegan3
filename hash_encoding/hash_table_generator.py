@@ -144,7 +144,7 @@ class HashTableGenerator(nn.Module):
                                                          tokenwise_linear=self.tokenwise_linear,
                                                          no_norm_layer=self.no_norm_layer, 
                                                          only_linear=False,
-                                                         deformable_head_num=2)
+                                                         deformable_head_num=4)
             setattr(self, f'transformer_block_{i}', transform_block)
             if self.output_skip:
                 setattr(self, f'hashside_out_{i}',

@@ -1,8 +1,11 @@
 """Layers to generate the hash table."""
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from training.networks_stylegan2 import FullyConnectedLayer
+
 
 class ModulatedLinear(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, s_dim: int,
@@ -60,17 +63,25 @@ class TokenWiseModulatedLinear(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, s_dim: int,
                  table_num: int=16,
                  activation: nn.Module=None,
-                 bias: bool=True):
+                 bias: bool=True,
+                 linear_clamp: float=256):
         """
             Args:
                 in_ch: input channel (has not been divided 2)
                 out_ch: output channel
-                table_num: table number (token number)
                 s_dim: style dimension
+                table_num (int): table number (token number). (default: 16)
+                activation (nn.Module): activation function.
+                    (default: None)
+                bias (bool): Use bias or not. (default: True)
+                linear_clamp (float): value X, clamp the value of linear output
+                    to [-X, +X]. (default: 256)
 
             ..note.: This espacially for the computation of hash table.
         """
         super().__init__()
+        self.linear_clamp = linear_clamp
+        self.lr_multiplier = 1.0 / np.sqrt(in_ch)
 
         weight = nn.Parameter(torch.randn(table_num, out_ch, in_ch))
         self.register_parameter('weight', weight)
@@ -87,7 +98,7 @@ class TokenWiseModulatedLinear(nn.Module):
         else:
             self.activ = None
 
-        self.s_mapping = FullyConnectedLayer(s_dim, in_ch, bias_init=1)
+        self.s_mapping = FullyConnectedLayer(s_dim, table_num, bias_init=1)
 
     def forward(self, x, s):
         batch_size = x.shape[0]
@@ -95,13 +106,17 @@ class TokenWiseModulatedLinear(nn.Module):
         s = self.s_mapping(s)
 
         weight = self.weight  # table_num x O x I
-        w = weight.unsqueeze(dim=0) # 1 x table_num x O x I
-        w =  w * s.reshape(batch_size, 1, 1, -1)
-        decoefs = (w.square().sum(dim=[3]) + 1e-8).rsqrt() # B x table_num x O
+        w = weight.unsqueeze(dim=0) # B x table_num x O x I
+        w =  w * s.reshape(batch_size, -1, 1, 1)
+        decoefs = (w.square().sum(dim=[3,]) + 1e-8).rsqrt() # B x table_num x O
 
-        x = x * s.reshape(batch_size, 1, -1)
+        x = x * s.reshape(batch_size, -1, 1)
         x = torch.einsum('noc,bnc->bno', weight, x).contiguous()
         x = x * decoefs
+
+        x = x * self.lr_multiplier
+
+        x = torch.clamp(x, -self.linear_clamp, self.linear_clamp)
 
         if self.bias is not None:
             x = x + self.bias

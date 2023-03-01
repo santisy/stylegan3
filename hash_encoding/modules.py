@@ -64,13 +64,11 @@ class MultiHeadAttention(nn.Module):
         self.k_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
         self.q_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
         self.v_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
-        self.o_mapping = ModulatedLinear(self.hidden_dim, self.out_dim, s_dim)
-        self.use_prob_attention = use_prob_attention
-        if use_prob_attention:
-            self.prob_atten = ProbAttention(mask_flag=False, factor=5)
+        self.o_mapping = ModulatedLinear(
+            self.hidden_dim * self.deformable_head_num, self.out_dim, s_dim)
 
         # Deformable Part
-        self.offset_network = MultiHeadOffsetNetwork(self.hidden_dim,
+        self.offset_network = MultiHeadOffsetNetwork(self.feat_dim,
                                                      self.feat_dim,
                                                      token_num,
                                                      deformable_head_num,
@@ -140,30 +138,28 @@ class MultiHeadAttention(nn.Module):
                 x: B x T x C
                 s: B x S_DIM
         """
-        b = x.size(0)
-        q = self.q_mapping(x, s) # B x T x C'
+        b = x.size(0) # Original batch size
 
-        offsets = self.offset_network(q) # B x (DH_NUM x T) x C x 2
+        offsets = self.offset_network(x) # B x (DH_NUM x T) x C x 2
         x = self._resample_tokens(x, offsets) # (B x DH_NUM) x T x C
-
-        # Reshape and replicate queries
-        q = q.reshape(q.size(0), q.size(1), self.head_num, self.head_dim)
-        q = q.repeat(self.deformable_head_num, 1, 1, 1)
 
         # (B x H) x N x C
         batch_size = x.size(0) # NOTE: The batch size here is augmented
+                               #    as with the number of deformable head
         token_num = x.size(1)
+        q = self.q_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
         k = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
         v = self.v_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
 
         out = self._resize_head_back(self._scaled_dot_product_attention(q, k, v),
                                      batch_size,
                                      token_num)
+        out = out.reshape(b, self.deformable_head_num, self.token_num, self.hidden_dim)
+        out = out.permute(0, 2, 1, 3)
+        out = out.reshape(b, self.token_num, self.hidden_dim * self.deformable_head_num)
         out = self.o_mapping(out, s)
-        out = out.reshape(b, self.deformable_head_num, self.token_num, self.out_dim)
-        out = out.sum(dim=1)
 
-        return out
+        return out # b x N x C
 
     def extra_repr(self) -> str:
         return (f'Input dimension {self.feat_dim}; Head number {self.head_num} '
