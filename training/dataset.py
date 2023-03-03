@@ -9,6 +9,7 @@
 """Streaming images and labels from datasets created with dataset_tool.py."""
 
 import os
+import cv2
 import numpy as np
 import zipfile
 import PIL.Image
@@ -31,12 +32,14 @@ class Dataset(torch.utils.data.Dataset):
         use_labels  = False,    # Enable conditioning labels? False = label dimension is zero.
         xflip       = False,    # Artificially double the size of the dataset via x-flips. Applied after max_size.
         random_seed = 0,        # Random seed to use when applying max_size.
+        img_size    = -1,       # Whether to resize the images
     ):
         self._name = name
         self._raw_shape = list(raw_shape)
         self._use_labels = use_labels
         self._raw_labels = None
         self._label_shape = None
+        self._img_size = img_size
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -92,7 +95,14 @@ class Dataset(torch.utils.data.Dataset):
         if self._xflip[idx]:
             assert image.ndim == 3 # CHW
             image = image[:, :, ::-1]
-        return image.copy(), self.get_label(idx)
+        image = image.copy()
+        if self._img_size > 0:
+            image = image.transpose(1, 2, 0)
+            image = cv2.resize(image, (self._img_size, self._img_size),
+                               interpolation=cv2.INTER_AREA)
+            image = image.transpose(2, 0, 1)
+
+        return image, self.get_label(idx)
 
     def get_label(self, idx):
         label = self._get_raw_labels()[self._raw_idx[idx]]
@@ -126,7 +136,10 @@ class Dataset(torch.utils.data.Dataset):
     def resolution(self):
         assert len(self.image_shape) == 3 # CHW
         assert self.image_shape[1] == self.image_shape[2]
-        return self.image_shape[1]
+        if self._img_size < 0:
+            return self.image_shape[1]
+        else:
+            return self._img_size
 
     @property
     def label_shape(self):

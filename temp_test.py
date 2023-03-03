@@ -1,8 +1,9 @@
 import torch
-from hash_encoding.layers import TokenWiseModulatedLinear
+from hash_encoding.layers import ModulatedGridLinear
 
-twml = TokenWiseModulatedLinear(128, 128, 16, 128).cuda()
-input_var = torch.randn(2, 16, 128).cuda()
-s = torch.randn(2, 128).cuda()
-out = twml(input_var, s)
+input_var = torch.randn(4, 16, 128).cuda()
+style_code = torch.randn(4, 256).cuda()
+mgl = ModulatedGridLinear(128, 128, 256, 16, add_pos_encodings=True).cuda()
+
+out = mgl(input_var, style_code)
 print(out.shape)

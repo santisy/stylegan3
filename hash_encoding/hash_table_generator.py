@@ -15,6 +15,7 @@ from hash_encoding.modules import StylelizedTransformerBlock
 from hash_encoding.modules import HashUp
 from hash_encoding.modules import HashSideOut
 from hash_encoding.modules import StackedModulatedMLP
+from hash_encoding.modules import StackedModulatedGridLinear
 from hash_encoding.layers import ModulatedLinear
 
 
@@ -127,25 +128,15 @@ class HashTableGenerator(nn.Module):
             token_num_now = (self.table_num if not self.shrink_down
                                 else int(self.token_num / (2 ** i)))
             # Every transformer block has 2 transform layers
-            transform_block = StylelizedTransformerBlock(dim_now,
-                                                         head_dim_now,
-                                                         token_num_now,
-                                                         self.style_dim,
-                                                         self.res_min,
-                                                         self.res_max,
-                                                         block_num=block_num,
-                                                         hidden_dim=dim_now,
-                                                         activation=nn.GELU,
-                                                         shuffle_input=self.shuffle_input,
-                                                         use_prob_attention=False,
-                                                         spatial_atten=self.spatial_atten,
-                                                         sample_size=sample_size,
-                                                         sample_res=sample_res,
-                                                         tokenwise_linear=self.tokenwise_linear,
-                                                         no_norm_layer=self.no_norm_layer, 
-                                                         only_linear=False,
-                                                         deformable_head_num=4)
-            setattr(self, f'transformer_block_{i}', transform_block)
+            transformer_block = StackedModulatedGridLinear(dim_now,
+                                                           self.style_dim,
+                                                           token_num_now,
+                                                           layer_n=3,
+                                                           activation=nn.GELU,
+                                                           add_pos_encodings=False,
+                                                           )
+            
+            setattr(self, f'transformer_block_{i}', transformer_block)
             if self.output_skip:
                 setattr(self, f'hashside_out_{i}',
                         HashSideOut(self.res_min, sample_res, token_num_now,
@@ -177,9 +168,7 @@ class HashTableGenerator(nn.Module):
         # Transformers following
         out = None
         for i in range(self.levels+1):
-            x = getattr(self, f'transformer_block_{i}')(x,
-                                                        next(s1_iter),
-                                                        next(s2_iter))
+            x = getattr(self, f'transformer_block_{i}')(x, next(s1_iter))
             if self.output_skip:
                 x_out = getattr(self, f'hashside_out_{i}')(x, next(s1_iter))
                 if out is not None: 
@@ -202,7 +191,7 @@ class HashTableGenerator(nn.Module):
         if not self.output_skip:
             out = out.reshape(out.shape[0], out.shape[1],
                                     out.shape[2] // self.F,
-                                    self.F)
+                                    self.F).contiguous()
 
         return out
 

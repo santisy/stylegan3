@@ -4,6 +4,7 @@ Modules for generating hash tables
 import math
 from functools import partial
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,6 +16,7 @@ from training.networks_stylegan2 import SynthesisLayer
 
 from hash_encoding.layers import ModulatedLinear
 from hash_encoding.layers import TokenWiseModulatedLinear
+from hash_encoding.layers import ModulatedGridLinear
 from hash_retrieve_module import HashTableRetrieve
 from hash_retrieve_module import HashTableRecon
 from hash_encoding.prob_attention import ProbAttention
@@ -61,11 +63,11 @@ class MultiHeadAttention(nn.Module):
         self.head_num = self.hidden_dim // head_dim
         self.deformable_head_num = deformable_head_num
 
-        self.k_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
-        self.q_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
-        self.v_mapping = ModulatedLinear(feat_dim, self.hidden_dim, s_dim)
-        self.o_mapping = ModulatedLinear(
-            self.hidden_dim * self.deformable_head_num, self.out_dim, s_dim)
+        self.k_mapping = nn.Linear(feat_dim, self.hidden_dim)
+        self.q_mapping = nn.Linear(feat_dim, self.hidden_dim)
+        self.v_mapping = nn.Linear(feat_dim, self.hidden_dim)
+        self.o_mapping = nn.Linear(
+                    self.hidden_dim * self.deformable_head_num, self.out_dim)
 
         # Deformable Part
         self.offset_network = MultiHeadOffsetNetwork(self.feat_dim,
@@ -132,11 +134,10 @@ class MultiHeadAttention(nn.Module):
 
         return x
 
-    def forward(self, x: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
             Args:
                 x: B x T x C
-                s: B x S_DIM
         """
         b = x.size(0) # Original batch size
 
@@ -147,9 +148,9 @@ class MultiHeadAttention(nn.Module):
         batch_size = x.size(0) # NOTE: The batch size here is augmented
                                #    as with the number of deformable head
         token_num = x.size(1)
-        q = self.q_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
-        k = self.k_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
-        v = self.v_mapping(x, s).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        q = self.q_mapping(x).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        k = self.k_mapping(x).reshape(batch_size, token_num, self.head_num, self.head_dim)
+        v = self.v_mapping(x).reshape(batch_size, token_num, self.head_num, self.head_dim)
 
         out = self._resize_head_back(self._scaled_dot_product_attention(q, k, v),
                                      batch_size,
@@ -157,7 +158,7 @@ class MultiHeadAttention(nn.Module):
         out = out.reshape(b, self.deformable_head_num, self.token_num, self.hidden_dim)
         out = out.permute(0, 2, 1, 3)
         out = out.reshape(b, self.token_num, self.hidden_dim * self.deformable_head_num)
-        out = self.o_mapping(out, s)
+        out = self.o_mapping(out)
 
         return out # b x N x C
 
@@ -443,11 +444,8 @@ class StylelizedTransformerBlock(nn.Module):
             x = torch.gather(x, -1, self.random_indices.repeat(batch_size, 1, 1))
         # Shuffle within hash tables
         for t, l in zip(self.t_blocks, self.l_layers):
-            if not self.only_linear:
-                x = t(x, s1) + x
-                x = F.layer_norm(x, (self.feat_dim,))
-            x = l(x, s2) + x
-            x = F.layer_norm(x, (self.feat_dim,))
+            x = F.layer_norm(t(x) + x, (self.feat_dim,))
+            x = F.layer_norm(l(x, s2) + x, (self.feat_dim,))
         return x
         
     
@@ -456,6 +454,31 @@ class StylelizedTransformerBlock(nn.Module):
                 f'Style dimension {self.s_dim}; Block number {self.block_num}')
 
 
+class StackedModulatedGridLinear(nn.Module):
+    def __init__(self, in_ch: int, s_dim: int, token_num: int,
+                 layer_n: int,
+                 activation: nn.Module=nn.ReLU,
+                 add_pos_encodings: bool=False,
+                ):
+        super().__init__()
+        self.in_ch = in_ch
+
+        self.mgl_list = nn.ModuleList()
+        for i in range(layer_n):
+            self.mgl_list.append(ModulatedGridLinear(
+                    in_ch,
+                    in_ch,
+                    s_dim,
+                    token_num,
+                    activation=activation,
+                    add_pos_encodings=True if (add_pos_encodings and i==0) else False,
+                    ))
+
+    def forward(self, x, s):
+        for l in self.mgl_list:
+            #x = F.layer_norm(l(x, s) + x, (self.in_ch,))
+            x = l(x, s)
+        return x
 
 class HashUp(nn.Module):
     def __init__(self,

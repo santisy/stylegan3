@@ -13,6 +13,8 @@ from hash_encoding import HashTableGenerator
 from hash_encoding.layers import ModulatedLinear
 from hash_encoding.modules import StackedModulatedMLP
 from hash_encoding.other_networks import MappingNetwork
+from hash_encoding.other_networks import MiniLinearDecoder
+from hash_encoding.other_networks import SynthesisStack
 from hash_retrieve_module import HashTableRetrieve
 from training.networks_stylegan2 import FullyConnectedLayer
 from utils.utils import sample_coords
@@ -133,13 +135,14 @@ class HashGenerator(nn.Module):
 
         #TODO: substitue this to mini-mlp?
         # Mini linear for resolve hash collision
-        if not output_skip:
-            self.mini_linear = StackedModulatedMLP(table_num * 2,
-                                                mlp_hidden,
-                                                mlp_out_dim,
-                                                style_dim,
-                                                3,
-                                                use_layer_norm=False)
+        #self.mini_linear = StackedModulatedMLP(table_num * 2,
+        #                                    mlp_hidden,
+        #                                    mlp_out_dim,
+        #                                    style_dim,
+        #                                    3,
+        #                                    use_layer_norm=False)
+        self.mini_conv = SynthesisStack(table_num*2, style_dim, self.img_size,
+                                        2, out_ch=3)
 
 
         self.register_buffer('s_avg', torch.zeros([style_dim]))
@@ -202,9 +205,17 @@ class HashGenerator(nn.Module):
                                                          coords,
                                                          self.res_min,
                                                          self.res_max)
-        mlp_out = self.mini_linear(hash_retrieved_feature, s[:, -1]) # B x N x OUT_DIM
-        ## Rendering
-        out = self._render(mlp_out, sample_size)
+        b = hash_retrieved_feature.size(0)
+        out = self.mini_conv(hash_retrieved_feature.reshape(
+                                                        b,
+                                                        self.img_size,
+                                                        self.img_size,
+                                                        -1).permute(0, 3, 1, 2),
+                            s[:, -1]                        
+                                                    )
+        #mlp_out = self.mini_linear(hash_retrieved_feature, s[:, -1]) # B x N x OUT_DIM
+        ### Rendering
+        #out = self._render(mlp_out, sample_size)
         return out
 
     def synthesis(self,

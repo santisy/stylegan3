@@ -184,6 +184,7 @@ def parse_comma_separated_list(s):
 @click.option('--tokenwise_linear', help='Use token wise linear or not.',                       type=bool, default=False, show_default=True)
 @click.option('--shrink_down', help='Whether to shrink it down or not.',                        type=bool, default=False, show_default=True)
 @click.option('--no_norm_layer', help='No normalization layer.',                                type=bool, default=False, show_default=True)
+@click.option('--img_size',     help='resize_img to something else.',                           type=int, default=-1, show_default=True)
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -246,6 +247,7 @@ def main(**kwargs):
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond
     c.training_set_kwargs.xflip = opts.mirror
+    c.training_set_kwargs.img_size = opts.img_size
 
     # Hyperparameters & settings.
     c.num_gpus = opts.gpus
