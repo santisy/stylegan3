@@ -124,6 +124,44 @@ class TokenWiseModulatedLinear(nn.Module):
         return x
 
 
+class AlongTokenLinear(nn.Module):
+    def __init__(self, ch: int, activation: nn.Module=nn.ReLU, bias: bool=True):
+        super().__init__()
+        self.ch = ch
+        self.linear1 = nn.Linear(ch, ch, bias=bias)
+        self.activ = activation()
+        self.linear2 = nn.Linear(ch, ch, bias=bias)
+
+    def forward(self, x):
+        ori_x = x
+        x = self.linear1(x)
+        x = self.activ(x)
+        x = self.linear2(x)
+        x = F.layer_norm(x + ori_x, (self.ch,))
+        return x
+
+
+class CrossTokenLinear(nn.Module):
+    def __init__(self, ch: int, s_dim: int,
+                 activation: nn.Module=nn.ReLU, bias: bool=True):
+        super().__init__()
+        # Cross Token Linear
+        self.ch = ch
+        self.linear1 = ModulatedLinear(ch, ch, s_dim, activation=activation,
+                                       bias=bias)
+        self.linear2 = ModulatedLinear(ch, ch, s_dim, activation=None,
+                                       bias=bias)
+
+    def forward(self, x, s):
+        ori_x = x
+        x = x.permute(0, 2, 1)
+        x = self.linear1(x, s)
+        x = self.linear2(x, s)
+        x = x.permute(0, 2, 1)
+        x = F.layer_norm(x + ori_x, (x.size(-1),))
+        return x
+
+
 class ModulatedGridLinear(nn.Module):
     def __init__(self,
                  in_ch: int, out_ch: int, s_dim: int, token_num: int,
@@ -133,35 +171,10 @@ class ModulatedGridLinear(nn.Module):
                  ):
         super().__init__()
         self.add_positional_encodings = add_pos_encodings
-        self.out_ch = out_ch
 
         # Along Token linear
-        weight = nn.Parameter(torch.randn(out_ch, in_ch))
-        self.register_parameter('weight1', weight)
-        nn.init.xavier_normal_(self.weight1)
-
-
-        # Cross Token Linear
-        weight = nn.Parameter(torch.randn(token_num, token_num))
-        self.register_parameter('weight2', weight)
-        nn.init.xavier_normal_(self.weight2)
-
-        # Bias
-        if bias:
-            bias1 = nn.Parameter(torch.zeros(out_ch))
-            bias2 = nn.Parameter(torch.zeros(1, token_num, 1))
-            self.register_parameter('bias1', bias1)
-            self.register_parameter('bias2', bias2)
-        else:
-            self.bias1 = None
-            self.bias2 = None
-
-        # Activation
-        self.activ1 = activation()
-        self.activ2 = activation()
-
-        # Style Mapping network
-        self.s_mapping = FullyConnectedLayer(s_dim, token_num, bias_init=1)
+        self.along_linear = AlongTokenLinear(in_ch, activation, bias=bias)
+        self.cross_linear = CrossTokenLinear(token_num, s_dim, activation, bias=bias)
 
         # Add positional encodings or not
         if add_pos_encodings:
@@ -182,26 +195,7 @@ class ModulatedGridLinear(nn.Module):
             x = x + self.pos_encoding.repeat(batch_size, 1, 1)
 
         # Along token linear
-        x_ori = x
-        x = F.linear(x, self.weight1, bias=self.bias1) # B x T x O
-        x = self.activ1(x) + x_ori
-        x_ori = x
-        x = F.layer_norm(x, (self.out_ch,))
-
-        # Cross token linear with style modulated per token
-        s = self.s_mapping(s) # B x T
-        weight = self.weight2
-        w = weight.unsqueeze(dim=0) # 1 x T x T
-        w = w * s.reshape(batch_size, 1, -1)
-        decoefs = (w.square().sum(dim=[2]) + 1e-8).rsqrt() # B x T
-
-        s = s.unsqueeze(dim=-1) # B x T x 1
-
-        x = x * s
-        x = torch.einsum('tn,bnc->btc', weight, x)
-        x = x * decoefs.unsqueeze(dim=-1)
-        x = self.activ2(x + self.bias2)
-        x = x + x_ori
-        x = F.layer_norm(x, (self.out_ch,))
+        x = self.along_linear(x)
+        x = self.cross_linear(x, s)
 
         return x

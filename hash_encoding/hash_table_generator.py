@@ -131,7 +131,7 @@ class HashTableGenerator(nn.Module):
             transformer_block = StackedModulatedGridLinear(dim_now,
                                                            self.style_dim,
                                                            token_num_now,
-                                                           layer_n=3,
+                                                           layer_n=2,
                                                            activation=nn.GELU,
                                                            add_pos_encodings=False,
                                                            )
