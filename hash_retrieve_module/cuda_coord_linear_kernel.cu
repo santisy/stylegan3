@@ -468,7 +468,7 @@ std::vector<torch::Tensor> retrieve_from_hash_table_cuda_forward(
     float resolution_list[table_num];
     float b_ = exp((log(res_max) - log(res_min)) / (table_num - 1));
     for (int i = 0; i < table_num; i++){
-        resolution_list[i] = res_min * pow(b_, i);
+        resolution_list[i] = floor(res_min * pow(b_, i));
     }
     float * res_list_device;
     cudaMalloc(&res_list_device, sizeof(float) * table_num);
@@ -539,7 +539,7 @@ std::vector<torch::Tensor> reconstruct_hash_table_cuda_forward(
     float resolution_list[table_num];
     float b_ = exp((log(res_max) - log(res_min)) / (table_num - 1));
     for (int i = 0; i < table_num; i++){
-        resolution_list[i] = res_min * pow(b_, i);
+        resolution_list[i] = floor(res_min * pow(b_, i));
     }
     float * res_list_device;
     cudaMalloc(&res_list_device, sizeof(float) * table_num);
@@ -594,7 +594,7 @@ torch::Tensor retrieve_from_hash_table_cuda_backward(
     float resolution_list[table_num];
     float b_ = exp((log(res_max) - log(res_min)) / (table_num - 1));
     for (int i = 0; i < table_num; i++){
-        resolution_list[i] = res_min * pow(b_, i);
+        resolution_list[i] = floor(res_min * pow(b_, i));
     }
     float * res_list_device;
     cudaMalloc(&res_list_device, sizeof(float) * table_num);
@@ -657,7 +657,7 @@ torch::Tensor reconstruct_hash_table_2D_cuda_backward(
     float resolution_list[table_num];
     float b_ = exp((log(res_max) - log(res_min)) / (table_num - 1));
     for (int i = 0; i < table_num; i++){
-        resolution_list[i] = res_min * pow(b_, i);
+        resolution_list[i] = floor(res_min * pow(b_, i));
     }
     float * res_list_device;
     cudaMalloc(&res_list_device, sizeof(float) * table_num);

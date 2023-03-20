@@ -50,6 +50,7 @@ class HashGenerator(nn.Module):
                  tokenwise_linear: bool=False,
                  shrink_down: bool=False,
                  no_norm_layer: bool=False,
+                 inter_filter: bool=False,
                  **kwargs
                  ):
         """
@@ -90,6 +91,7 @@ class HashGenerator(nn.Module):
                 shrink_down (bool): Shrink down or not of the arch.
                     (default: False)
                 no_norm_layer (bool): No normalization layer.
+                inter_filter (bool): Internal filter using conv/filter.
         """
         super().__init__()
         self.res_min = res_min
@@ -130,19 +132,18 @@ class HashGenerator(nn.Module):
                                         spatial_atten=spatial_atten,
                                         tokenwise_linear=tokenwise_linear,
                                         no_norm_layer=no_norm_layer,
-                                        shrink_down =shrink_down
+                                        shrink_down =shrink_down,
+                                        inter_filter=inter_filter,
                                         )
 
         #TODO: substitue this to mini-mlp?
         # Mini linear for resolve hash collision
-        #self.mini_linear = StackedModulatedMLP(table_num * 2,
-        #                                    mlp_hidden,
-        #                                    mlp_out_dim,
-        #                                    style_dim,
-        #                                    3,
-        #                                    use_layer_norm=False)
-        self.mini_conv = SynthesisStack(table_num*2, style_dim, self.img_size,
-                                        2, out_ch=3)
+        self.mini_linear = StackedModulatedMLP(table_num * 2,
+                                               mlp_hidden,
+                                               mlp_out_dim,
+                                               style_dim,
+                                               3,
+                                               use_layer_norm=False)
 
 
         self.register_buffer('s_avg', torch.zeros([style_dim]))
@@ -206,16 +207,9 @@ class HashGenerator(nn.Module):
                                                          self.res_min,
                                                          self.res_max)
         b = hash_retrieved_feature.size(0)
-        out = self.mini_conv(hash_retrieved_feature.reshape(
-                                                        b,
-                                                        self.img_size,
-                                                        self.img_size,
-                                                        -1).permute(0, 3, 1, 2),
-                            s[:, -1]                        
-                                                    )
-        #mlp_out = self.mini_linear(hash_retrieved_feature, s[:, -1]) # B x N x OUT_DIM
+        mlp_out = self.mini_linear(hash_retrieved_feature, s[:, -1]) # B x N x OUT_DIM
         ### Rendering
-        #out = self._render(mlp_out, sample_size)
+        out = self._render(mlp_out, sample_size)
         return out
 
     def synthesis(self,

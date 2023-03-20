@@ -185,6 +185,8 @@ def parse_comma_separated_list(s):
 @click.option('--shrink_down', help='Whether to shrink it down or not.',                        type=bool, default=False, show_default=True)
 @click.option('--no_norm_layer', help='No normalization layer.',                                type=bool, default=False, show_default=True)
 @click.option('--img_size',     help='resize_img to something else.',                           type=int, default=-1, show_default=True)
+@click.option('--inter_filter', help='Among linear use inter conv/filter.',                     type=bool, default=False, show_default=True)
+
 
 def main(**kwargs):
     """Train a GAN using the techniques described in the paper
@@ -234,6 +236,7 @@ def main(**kwargs):
                                  tokenwise_linear=opts.tokenwise_linear,
                                  shrink_down=opts.shrink_down,
                                  no_norm_layer=opts.no_norm_layer,
+                                 inter_filter=opts.inter_filter,
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)

@@ -40,6 +40,7 @@ class HashTableGenerator(nn.Module):
                  tokenwise_linear: bool=False,
                  no_norm_layer: bool=False,
                  shrink_down: bool=False,
+                 inter_filter: bool=False,
                  ):
         """
             Args:
@@ -67,6 +68,7 @@ class HashTableGenerator(nn.Module):
                 no_norm_layer (bool): No normalization layer.
                     (default: False)
                 shrink_down (bool): If shrink down arch (default=False)
+                inter_filter (bool): Internal filter using conv/filter.
         """
         super(HashTableGenerator, self).__init__()
 
@@ -88,17 +90,24 @@ class HashTableGenerator(nn.Module):
         self.tokenwise_linear = tokenwise_linear
         self.no_norm_layer = no_norm_layer
         self.shrink_down = shrink_down
+        self.inter_filter = inter_filter
         self.F = 2 #NOTE: We only support entry size 2 now for CUDA programming reason
         self.levels = int(self.table_size_log2 - np.log2(self.init_dim))
         self.data_dim = 2 # Is this a 2D data or 3D data
 
         self.b_res = np.exp((np.log(res_max) - np.log(res_min)) / (self.levels))
+        self.b_token = np.exp((np.log(512) - np.log(table_num)) / (self.levels))
 
-        self.token_num = token_num = table_num if not shrink_down else int(2 ** table_size_log2)
+        self.token_num = token_num = 512 if not shrink_down else int(2 ** table_size_log2)
         token_dim = self.init_dim if not shrink_down else table_num
         # NOTE: we forcefully set 
         self.register_buffer('pos_encoding',
-                             sinuous_pos_encode(token_num, token_dim))
+                             sinuous_pos_encode(token_num,
+                                                token_dim,
+                                                res_min=res_min,
+                                                res_max=res_max,
+                                                split_n=None if not shrink_down else table_num,
+                                               ))
         self._build_layers()
         dprint('Finished building hash table generator.', color='g')
 
@@ -123,23 +132,33 @@ class HashTableGenerator(nn.Module):
             block_num = 1 if not self.shrink_down else 1
             # Sample size and sample res
             sample_size = min(dim_now // 2, 128)
-            sample_res = int(np.ceil(self.res_min * self.b_res ** i))
+            sample_res = int(np.floor(self.res_min * self.b_res ** i))
             # If shrink down the table_num (token_num) will change
-            token_num_now = (self.table_num if not self.shrink_down
+            token_num_now = (512 / (self.b_token ** i) if not self.shrink_down
                                 else int(self.token_num / (2 ** i)))
+            next_token_num = (512 / (self.b_token ** (i + 1)) if
+                              not self.shrink_down else None)
+            if next_token_num is not None and next_token_num < self.table_num:
+                next_token_num = self.table_num
             # Every transformer block has 2 transform layers
             transformer_block = StackedModulatedGridLinear(dim_now,
                                                            self.style_dim,
                                                            token_num_now,
                                                            layer_n=2,
-                                                           activation=nn.GELU,
+                                                           activation=nn.ReLU,
                                                            add_pos_encodings=False,
+                                                           inter_filter=self.inter_filter,
+                                                           sample_res=sample_res,
+                                                           next_token_num=next_token_num,
+                                                           upsample=not self.shrink_down
                                                            )
             
             setattr(self, f'transformer_block_{i}', transformer_block)
             if self.output_skip:
                 setattr(self, f'hashside_out_{i}',
-                        HashSideOut(self.res_min, sample_res, token_num_now,
+                        HashSideOut(self.res_min,
+                                    sample_res,
+                                    token_num_now,
                                     self.style_dim
                                     ))
 

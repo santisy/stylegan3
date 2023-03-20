@@ -1,34 +1,58 @@
 """Some utilities"""
 import os
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 
 __all__ = ['sinuous_pos_encode']
 
 
-def sinuous_pos_encode(table_num: int, token_n: int):
+def sinuous_pos_encode(table_num: int, token_d: int,
+                       res_min: int=None,
+                       res_max: int=None,
+                       split_n: int=None):
     """
         Args:
             table_num (int): table number for specify the index for each table
-            token_n (int): frequency encoded dimension. The length of each input
+            token_d (int): frequency encoded dimension. The length of each input
                 token.
+            res_min (int): minimum resolution the table represent.
+            res_max (int): maximum resolution the table represent.
+            split_n (int): Is the table n already be splitted?
+
         Returns:
             positional encoded vector B x N x (dim x 2)
     """
+    token_n = split_n if split_n is not None else table_num
+    token_d_now = int(token_d * table_num / token_n)
+    b = np.exp((np.log(res_max) - np.log(res_min)) / (token_n - 1))
+    res_list = res_min * b ** np.arange(token_n)
 
-    indices = torch.arange(table_num).unsqueeze(dim=1).float()
-    k = (torch.arange(token_n).float() / token_n).unsqueeze(dim=0)
+    indices = torch.arange(token_n).unsqueeze(dim=1).float() / 10000.
+    k = torch.zeros((token_d_now // 2, 2))
+    k[:, 0] = (torch.arange(token_d_now // 2).float() * 2 / token_d_now)
+    k[:, 1] = (torch.arange(token_d_now // 2).float() * 2 / token_d_now)
+    k = k.flatten().unsqueeze(dim=0)
 
     temp_p = indices ** k
     temp_p = temp_p.unsqueeze(dim=0) # 1 x N (number of token) x L (token length)
     
     # Phase shift to generate both sin and cos
-    shift_p = torch.zeros((token_n // 2, 2))
+    shift_p = torch.zeros((token_d_now // 2, 2))
     shift_p[:, 1] = torch.pi / 2.
     shift_p = shift_p.flatten()
     shift_p = shift_p.unsqueeze(dim=0).unsqueeze(dim=0)
+    pos_encodings = torch.cos(temp_p + shift_p)
 
-    return torch.cos(temp_p + shift_p)
+    for i, res in enumerate(res_list):
+        dropout_p = np.clip(1 - (res / float(res_max)) ** 2, 0, 1)
+        pos_encodings[0, i, :] = F.dropout(pos_encodings[0, i, :],
+                                           p=dropout_p)
+
+    pos_encodings = pos_encodings.reshape(1, table_num, token_d).detach()
+
+    return pos_encodings
 
 
 def delete_file(file_path: str):
