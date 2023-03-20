@@ -134,9 +134,9 @@ class HashTableGenerator(nn.Module):
             sample_size = min(dim_now // 2, 128)
             sample_res = int(np.floor(self.res_min * self.b_res ** i))
             # If shrink down the table_num (token_num) will change
-            token_num_now = (512 / (self.b_token ** i) if not self.shrink_down
+            token_num_now = (int(np.ceil(512 / (self.b_token ** i))) if not self.shrink_down
                                 else int(self.token_num / (2 ** i)))
-            next_token_num = (512 / (self.b_token ** (i + 1)) if
+            next_token_num = (int(np.ceil(512 / (self.b_token ** (i + 1)))) if
                               not self.shrink_down else None)
             if next_token_num is not None and next_token_num < self.table_num:
                 next_token_num = self.table_num
@@ -200,7 +200,8 @@ class HashTableGenerator(nn.Module):
             if i != self.levels:
                 # Upscale as concat
                 if not self.shrink_down:
-                    x = torch.cat((x, x), dim=-1)
+                    #x = torch.cat((x, x), dim=-1)
+                    pass
                 else:
                     x = x.reshape(b, x.size(1) // 2, 2, -1)
                     x = x.reshape(b, x.size(1), -1)

@@ -45,10 +45,10 @@ def sinuous_pos_encode(table_num: int, token_d: int,
     shift_p = shift_p.unsqueeze(dim=0).unsqueeze(dim=0)
     pos_encodings = torch.cos(temp_p + shift_p)
 
-    for i, res in enumerate(res_list):
-        dropout_p = np.clip(1 - (res / float(res_max)) ** 2, 0, 1)
-        pos_encodings[0, i, :] = F.dropout(pos_encodings[0, i, :],
-                                           p=dropout_p)
+    #for i, res in enumerate(res_list):
+    #    dropout_p = np.clip(1 - (res / float(res_max)) ** 2, 0, 1)
+    #    pos_encodings[0, i, :] = F.dropout(pos_encodings[0, i, :],
+    #                                       p=dropout_p)
 
     pos_encodings = pos_encodings.reshape(1, table_num, token_d).detach()
 
