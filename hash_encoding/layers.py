@@ -11,6 +11,7 @@ from hash_retrieve_module import HashTableRetrieve
 from hash_retrieve_module import HashTableRecon
 from utils.utils import sinuous_pos_encode
 from utils.utils import sample_coords
+from utils.utils import get_hash_mask
 
 
 class ModulatedLinear(nn.Module):
@@ -169,7 +170,7 @@ class HashFilter(nn.Module):
         self.register_buffer('coords', coords)
 
         self.conv1 = SynthesisLayer(self.ch,
-                                    self.ch * 2,
+                                    self.ch,
                                     style_dim,
                                     sample_res,
                                     kernel_size=3,
@@ -178,15 +179,6 @@ class HashFilter(nn.Module):
                                     resample_filter=[1,3,3,1],
                                     activation='lrelu',
                                     )
-        self.conv2 = SynthesisLayer(self.ch * 2,
-                                    self.ch, 
-                                    style_dim,
-                                    sample_res,
-                                    kernel_size=3,
-                                    up=1,
-                                    use_noise=False,
-                                    resample_filter=None,
-                                    activation='linear')
 
     def forward(self, inputs, s):
 
@@ -209,9 +201,8 @@ class HashFilter(nn.Module):
                                                     self.ch
                                                     ).permute(0, 3, 1, 2)
 
-        block_tensor1 = self.conv1(block_tensor, s) 
-        block_tensor2 = self.conv2(block_tensor1, s) + block_tensor
-        tokenize_tensor = block_tensor2.reshape(batch_size, self.ch, -1
+        block_tensor = self.conv1(block_tensor, s) 
+        tokenize_tensor = block_tensor.reshape(batch_size, self.ch, -1
                                                ).permute(0, 2, 1).contiguous()
         
         # Recon the hash tables
@@ -241,7 +232,6 @@ class AlongTokenLinear(nn.Module):
 
     def forward(self, x):
         ori_x = x
-        x = F.layer_norm(x, (x.size(-1),))
         x = self.linear1(x)
         x = self.activ(x)
         x = self.linear2(x)
@@ -249,22 +239,32 @@ class AlongTokenLinear(nn.Module):
             x = x + torch.cat((ori_x, ori_x), -1)
         else:
             x = x + ori_x
+        x = F.layer_norm(x, (x.size(-1),))
         return x
 
 
 class CrossTokenLinear(nn.Module):
     def __init__(self, ch: int, s_dim: int,
                  activation: nn.Module=nn.ReLU, bias: bool=True,
-                 next_token_num: int=None):
+                 next_token_num: int=None,
+                 no_modulated: bool=False):
         super().__init__()
         # Cross Token Linear
         self.ch = ch
         # We are shrinking the token number
         self.next_ch = next_ch = next_token_num if next_token_num is not None else ch
-        self.linear1 = ModulatedLinear(ch, next_ch, s_dim, activation=activation,
-                                       bias=bias)
-        self.linear2 = ModulatedLinear(next_ch, next_ch, s_dim, activation=None,
-                                       bias=bias)
+        if not no_modulated:
+            self.linear1 = ModulatedLinear(ch, next_ch, s_dim, activation=activation,
+                                        bias=bias)
+            self.linear2 = ModulatedLinear(next_ch, next_ch, s_dim, activation=None,
+                                        bias=bias)
+            self.activ = nn.Identity()
+        else:
+            self.linear1 = nn.Linear(ch, next_ch, bias=bias)
+            self.linear2 = nn.Linear(next_ch, next_ch, bias=bias)
+            self.activ = activation()
+
+
         if next_ch != ch:
             self.short_cut = nn.Linear(ch, next_ch)
         else:
@@ -272,12 +272,13 @@ class CrossTokenLinear(nn.Module):
 
     def forward(self, x, s):
         ori_x = x.permute(0, 2, 1)
-        x = F.layer_norm(x, (x.size(-1),))
         x = x.permute(0, 2, 1)
-        x = self.linear1(x, s)
-        x = self.linear2(x, s)
+        x = self.linear1(x)
+        x = self.activ(x)
+        x = self.linear2(x)
         x = x + self.short_cut(ori_x)
         x = x.permute(0, 2, 1)
+        x = F.layer_norm(x, (x.size(-1),))
         return x
 
 
@@ -298,14 +299,22 @@ class ModulatedGridLinear(nn.Module):
         self.inter_filter = inter_filter
         # Decrease token number and increase token length
         self.upsample = upsample 
-        self.next_token_num = next_token_num
+        next_token_num = next_token_num if next_token_num is not None else token_num
 
         # Along Token linear
         self.along_linear = AlongTokenLinear(in_ch, activation, bias=bias,
                                              upsample=upsample)
+        # TODO: write the masking here
+        # hash_mask1 = get_hash_mask(sample_res, res_min, token_num,
+        #                            in_ch * 2 if upsample else in_ch)
+        # self.register_buffer('hash_mask1', hash_mask1)
         self.cross_linear = CrossTokenLinear(token_num, s_dim, activation,
                                              bias=bias,
-                                             next_token_num=next_token_num)
+                                             next_token_num=next_token_num,
+                                             no_modulated=inter_filter)
+        # hash_mask2 = get_hash_mask(sample_res, res_min, next_token_num,
+        #                            in_ch * 2 if upsample else in_ch)
+        # self.register_buffer('hash_mask2', hash_mask2)
 
         # Add positional encodings or not
         if add_pos_encodings:
@@ -315,7 +324,7 @@ class ModulatedGridLinear(nn.Module):
         # Using hash up and hash back at certain resolution and inter-mediate
         #   filter/conv
         if inter_filter:
-            self.hash_filter = HashFilter(token_num, res_min, sample_res,
+            self.hash_filter = HashFilter(next_token_num, res_min, sample_res,
                                           s_dim, sample_res, None, None,
                                           activation=nn.ReLU)
 
@@ -333,8 +342,8 @@ class ModulatedGridLinear(nn.Module):
 
         # Along token linear
         x = self.along_linear(x)
+        x = self.cross_linear(x, s)
         if self.inter_filter:
             x = self.hash_filter(x, s)
-        x = self.cross_linear(x, s)
 
         return x

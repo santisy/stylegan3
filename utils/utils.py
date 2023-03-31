@@ -55,6 +55,30 @@ def sinuous_pos_encode(table_num: int, token_d: int,
     return pos_encodings
 
 
+def get_hash_mask(res_max: int, res_min: int,
+                  token_num: int, table_len: int) -> torch.Tensor:
+    b = np.exp((np.log(res_max) - np.log(res_min))/(token_num - 1))
+    hash_mask = torch.zeros((token_num, table_len))
+
+    # Get 2D coords
+    c = torch.arange(res_max) + 0.5
+    x, y = torch.meshgrid(c, c, indexing='xy')
+    # Normalize it to [0, 1]
+    coords = torch.stack((x, y), dim=-1).reshape(-1, 2) / res_max
+
+    # 1, 2654435761
+    # Iterate on each resolution
+    for i in range(token_num):
+        res_table = np.ceil(res_min * b ** i)
+        current_coords = torch.floor(coords * res_table).long()
+        for x, y in current_coords:
+            hash_mask[i, ((x) ^ (y * 2654435761)) % table_len] = 1
+            hash_mask[i, ((x + 1) ^ (y * 2654435761)) % table_len] = 1
+            hash_mask[i, ((x) ^ ((y + 1) * 2654435761)) % table_len] = 1
+            hash_mask[i, ((x + 1) ^ ((y + 1) * 2654435761)) % table_len] = 1
+
+    return hash_mask.unsqueeze(dim=0)
+
 def delete_file(file_path: str):
     # TODO: More to add if we involve HDFS file system
     # Remove the local path
