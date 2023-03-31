@@ -13,6 +13,19 @@ from utils.utils import sinuous_pos_encode
 from utils.utils import sample_coords
 from utils.utils import get_hash_mask
 
+class AdaIN(nn.Module):
+    def __init__(self, ch, s_dim):
+        super().__init__()
+        self.linear_map = nn.Linear(s_dim, 2 * ch, bias=False)
+
+    def forward(self, x, s):
+        a, b = self.linear_map(s).chunk(2, dim=-1)
+        a = a.unsqueeze(dim=1) + 1.0
+        b = b.unsqueeze(dim=1)
+        x = F.layer_norm(x, (x.size(-1),))
+        x = x * a + b
+
+        return x
 
 class ModulatedLinear(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, s_dim: int,
@@ -218,28 +231,50 @@ class HashFilter(nn.Module):
 
 
 class AlongTokenLinear(nn.Module):
-    def __init__(self, ch: int, activation: nn.Module=nn.ReLU,
+    def __init__(self,
+                 ch: int,
+                 activation: nn.Module=nn.ReLU,
                  bias: bool=True,
-                 upsample: bool=False):
+                 upsample: bool=False,
+                 base_ch:  int=64,
+                 expand_ratio: int=2
+                 ):
+        """ This layer is a mimic of the inverse residual block of 
+                mobile-netv2.
+        """
         super().__init__()
         self.ch = ch
+        self.base_ch = base_ch
         self.upsample = upsample
-        next_ch = ch * 2 if upsample else ch
-        self.linear1 = nn.Linear(ch, next_ch, bias=bias)
-        self.activ = activation()
-        self.linear2 = nn.Linear(next_ch, next_ch, bias=bias)
+        self.local_linear_01 = nn.Linear(base_ch, base_ch * expand_ratio,
+                                         bias=bias)
+        if ch > base_ch:
+            global_ch = ch // base_ch
+            self.global_linear = nn.Linear(global_ch, global_ch, bias=bias)
+        else:
+            self.global_linear = nn.Identity()
+        self.local_linear_02 = nn.Linear(base_ch * expand_ratio, base_ch,
+                                         bias=bias)
 
+        self.activ1 = activation()
+        self.activ2 = activation()
 
     def forward(self, x):
         ori_x = x
-        x = self.linear1(x)
-        x = self.activ(x)
-        x = self.linear2(x)
-        if self.upsample: 
-            x = x + torch.cat((ori_x, ori_x), -1)
-        else:
-            x = x + ori_x
+        b, n, c = x.shape
+        x = x.reshape(b, n, c//self.base_ch, self.base_ch)
+        x = self.local_linear_01(x)
         x = F.layer_norm(x, (x.size(-1),))
+        x = self.activ1(x)
+        x = x.permute(0, 1, 3, 2)
+        x = self.global_linear(x)
+        x = F.layer_norm(x, (x.size(-1),))
+        x = self.activ2(x)
+        x = x.permute(0, 1, 3, 2)
+        x = self.local_linear_02(x)
+        x = F.layer_norm(x, (x.size(-1),))
+        x = x.reshape(b, n, c)
+        x = x + ori_x
         return x
 
 
@@ -252,33 +287,24 @@ class CrossTokenLinear(nn.Module):
         # Cross Token Linear
         self.ch = ch
         # We are shrinking the token number
-        self.next_ch = next_ch = next_token_num if next_token_num is not None else ch
-        if not no_modulated:
-            self.linear1 = ModulatedLinear(ch, next_ch, s_dim, activation=activation,
-                                        bias=bias)
-            self.linear2 = ModulatedLinear(next_ch, next_ch, s_dim, activation=None,
-                                        bias=bias)
-            self.activ = nn.Identity()
-        else:
-            self.linear1 = nn.Linear(ch, next_ch, bias=bias)
-            self.linear2 = nn.Linear(next_ch, next_ch, bias=bias)
-            self.activ = activation()
+        self.next_ch = ch
+        self.linear1 = nn.Linear(ch, ch * 2)
+        self.adain1 = AdaIN(ch * 2, s_dim)
+        self.linear2 = nn.Linear(ch * 2, ch)
+        self.adain1 = AdaIN(ch, s_dim)
+        self.activ = activation()
 
-
-        if next_ch != ch:
-            self.short_cut = nn.Linear(ch, next_ch)
-        else:
-            self.short_cut = nn.Identity()
 
     def forward(self, x, s):
         ori_x = x.permute(0, 2, 1)
         x = x.permute(0, 2, 1)
         x = self.linear1(x)
+        x = self.adain1(x, s)
         x = self.activ(x)
         x = self.linear2(x)
-        x = x + self.short_cut(ori_x)
+        x = self.adain1(x, s)
+        x = x + ori_x
         x = x.permute(0, 2, 1)
-        x = F.layer_norm(x, (x.size(-1),))
         return x
 
 
@@ -347,3 +373,4 @@ class ModulatedGridLinear(nn.Module):
             x = self.hash_filter(x, s)
 
         return x
+

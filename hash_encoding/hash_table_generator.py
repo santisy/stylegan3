@@ -200,8 +200,7 @@ class HashTableGenerator(nn.Module):
             if i != self.levels:
                 # Upscale as concat
                 if not self.shrink_down:
-                    #x = torch.cat((x, x), dim=-1)
-                    pass
+                    x = torch.cat((x, x), dim=-1)
                 else:
                     x = x.reshape(b, x.size(1) // 2, 2, -1)
                     x = x.reshape(b, x.size(1), -1)

@@ -50,7 +50,8 @@ def sinuous_pos_encode(table_num: int, token_d: int,
     #    pos_encodings[0, i, :] = F.dropout(pos_encodings[0, i, :],
     #                                       p=dropout_p)
 
-    pos_encodings = pos_encodings.reshape(1, table_num, token_d).detach()
+    pos_encodings = pos_encodings.reshape(1, table_num, token_d)
+    pos_encodings = F.layer_norm(pos_encodings, (token_d,)).detach()
 
     return pos_encodings
 
