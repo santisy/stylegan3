@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 from training.networks_stylegan2 import SynthesisLayer
 from training.networks_stylegan2 import FullyConnectedLayer
+from hash_encoding.fourier_1d import SpectralConv1d
 from hash_retrieve_module import HashTableRetrieve
 from hash_retrieve_module import HashTableRecon
 from utils.utils import sinuous_pos_encode
@@ -24,6 +25,7 @@ class AdaIN(nn.Module):
         b = b.unsqueeze(dim=1)
         x = F.layer_norm(x, (x.size(-1),))
         x = x * a + b
+
 
         return x
 
@@ -233,48 +235,21 @@ class HashFilter(nn.Module):
 class AlongTokenLinear(nn.Module):
     def __init__(self,
                  ch: int,
+                 s_dim: int,
                  activation: nn.Module=nn.ReLU,
                  bias: bool=True,
                  upsample: bool=False,
-                 base_ch:  int=64,
-                 expand_ratio: int=2
+                 modes:  int=16,
                  ):
         """ This layer is a mimic of the inverse residual block of 
                 mobile-netv2.
         """
         super().__init__()
         self.ch = ch
-        self.base_ch = base_ch
-        self.upsample = upsample
-        self.local_linear_01 = nn.Linear(base_ch, base_ch * expand_ratio,
-                                         bias=bias)
-        if ch > base_ch:
-            global_ch = ch // base_ch
-            self.global_linear = nn.Linear(global_ch, global_ch, bias=bias)
-        else:
-            self.global_linear = nn.Identity()
-        self.local_linear_02 = nn.Linear(base_ch * expand_ratio, base_ch,
-                                         bias=bias)
+        self.modulated_spectral_conv = SpectralConv1d(ch, ch, s_dim, modes1=modes)
 
-        self.activ1 = activation()
-        self.activ2 = activation()
-
-    def forward(self, x):
-        ori_x = x
-        b, n, c = x.shape
-        x = x.reshape(b, n, c//self.base_ch, self.base_ch)
-        x = self.local_linear_01(x)
-        x = F.layer_norm(x, (x.size(-1),))
-        x = self.activ1(x)
-        x = x.permute(0, 1, 3, 2)
-        x = self.global_linear(x)
-        x = F.layer_norm(x, (x.size(-1),))
-        x = self.activ2(x)
-        x = x.permute(0, 1, 3, 2)
-        x = self.local_linear_02(x)
-        x = F.layer_norm(x, (x.size(-1),))
-        x = x.reshape(b, n, c)
-        x = x + ori_x
+    def forward(self, x, s):
+        x = self.modulated_spectral_conv(x, s)
         return x
 
 
@@ -287,23 +262,26 @@ class CrossTokenLinear(nn.Module):
         # Cross Token Linear
         self.ch = ch
         # We are shrinking the token number
-        self.next_ch = ch
-        self.linear1 = nn.Linear(ch, ch * 2)
-        self.adain1 = AdaIN(ch * 2, s_dim)
-        self.linear2 = nn.Linear(ch * 2, ch)
-        self.adain1 = AdaIN(ch, s_dim)
-        self.activ = activation()
+        self.next_ch = next_ch = next_token_num if next_token_num is not None else ch
+        self.linear1 = nn.Linear(ch, next_ch, bias=bias)
+        self.linear2 = nn.Linear(next_ch, next_ch, bias=bias)
+        self.activ1 = activation()
+        self.activ2 = activation()
 
+
+        if next_ch != ch:
+            self.short_cut = nn.Linear(ch, next_ch)
+        else:
+            self.short_cut = nn.Identity()
 
     def forward(self, x, s):
         ori_x = x.permute(0, 2, 1)
         x = x.permute(0, 2, 1)
         x = self.linear1(x)
-        x = self.adain1(x, s)
-        x = self.activ(x)
+        x = self.activ1(x)
         x = self.linear2(x)
-        x = self.adain1(x, s)
-        x = x + ori_x
+        x = self.activ2(2)
+        x = x + self.short_cut(ori_x)
         x = x.permute(0, 2, 1)
         return x
 
@@ -328,7 +306,7 @@ class ModulatedGridLinear(nn.Module):
         next_token_num = next_token_num if next_token_num is not None else token_num
 
         # Along Token linear
-        self.along_linear = AlongTokenLinear(in_ch, activation, bias=bias,
+        self.along_linear = AlongTokenLinear(in_ch, s_dim, activation, bias=bias,
                                              upsample=upsample)
         # TODO: write the masking here
         # hash_mask1 = get_hash_mask(sample_res, res_min, token_num,
@@ -362,15 +340,15 @@ class ModulatedGridLinear(nn.Module):
                 s: B x S
         """
         batch_size = x.size(0)
-
+        x_ori = x
         if self.add_positional_encodings:
             x = x + self.pos_encoding.repeat(batch_size, 1, 1)
-
+        
         # Along token linear
-        x = self.along_linear(x)
-        x = self.cross_linear(x, s)
+        x = self.along_linear(x, s)
+        x = self.cross_linear(x)
         if self.inter_filter:
             x = self.hash_filter(x, s)
-
+        x = F.layer_norm(x + x_ori, (x.size(-1),))
         return x
 

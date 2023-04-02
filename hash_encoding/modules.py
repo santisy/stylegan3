@@ -376,7 +376,6 @@ class StackedModulatedGridLinear(nn.Module):
 
         self.mgl_list = nn.ModuleList()
         for i in range(layer_n):
-            upsample_now = upsample if i==0 else False
             self.mgl_list.append(ModulatedGridLinear(
                     in_ch,
                     in_ch,
@@ -387,10 +386,7 @@ class StackedModulatedGridLinear(nn.Module):
                     sample_res=sample_res,
                     add_pos_encodings=True if (add_pos_encodings and i==0) else False,
                     next_token_num=next_token_num if i==layer_n-1 else None,
-                    upsample=upsample_now,
                     ))
-            in_ch = in_ch * 2 if upsample_now else in_ch
-            upsample_now = False # reset the upsample flag
 
 
     def forward(self, x, s):
