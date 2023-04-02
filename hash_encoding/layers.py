@@ -303,7 +303,8 @@ class ModulatedGridLinear(nn.Module):
         self.along_linear = AlongTokenLinear(token_num, s_dim,
                                              activation,
                                              bias=bias,
-                                             upsample=upsample)
+                                             upsample=upsample,
+                                             modes=sample_res)
         # TODO: write the masking here
         # hash_mask1 = get_hash_mask(sample_res, res_min, token_num,
         #                            in_ch * 2 if upsample else in_ch)
