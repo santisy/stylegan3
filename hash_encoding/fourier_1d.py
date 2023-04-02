@@ -10,7 +10,6 @@ import torch.nn as nn
 
 from training.networks_stylegan2 import FullyConnectedLayer
 
-
 __all__ = ['SpectralConv1d']
 
 
@@ -76,7 +75,7 @@ class SpectralConv1d(nn.Module):
         s = s.reshape(batchsize, self.in_channels, 1, 2)
 
         # Multiply relevant Fourier modes
-        out_ft = torch.zeros(batchsize, self.out_channels, x.size(-1) // 2,
+        out_ft = torch.zeros(batchsize, self.out_channels, x.size(-1) // 2 + 1,
                              dtype=torch.cfloat, device=x.device)
         out_ft[:, :, :self.modes1] = modulated_compl_mul1d(x_ft[:, :, :self.modes1],
                                                            self.weights1,

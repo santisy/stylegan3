@@ -269,20 +269,14 @@ class CrossTokenLinear(nn.Module):
         self.activ2 = activation()
 
 
-        if next_ch != ch:
-            self.short_cut = nn.Linear(ch, next_ch)
-        else:
-            self.short_cut = nn.Identity()
 
-    def forward(self, x, s):
+    def forward(self, x):
         ori_x = x.permute(0, 2, 1)
         x = x.permute(0, 2, 1)
         x = self.linear1(x)
         x = self.activ1(x)
         x = self.linear2(x)
-        x = self.activ2(2)
-        x = x + self.short_cut(ori_x)
-        x = x.permute(0, 2, 1)
+        x = self.activ2(x)
         return x
 
 
@@ -306,7 +300,9 @@ class ModulatedGridLinear(nn.Module):
         next_token_num = next_token_num if next_token_num is not None else token_num
 
         # Along Token linear
-        self.along_linear = AlongTokenLinear(in_ch, s_dim, activation, bias=bias,
+        self.along_linear = AlongTokenLinear(token_num, s_dim,
+                                             activation,
+                                             bias=bias,
                                              upsample=upsample)
         # TODO: write the masking here
         # hash_mask1 = get_hash_mask(sample_res, res_min, token_num,
@@ -332,6 +328,10 @@ class ModulatedGridLinear(nn.Module):
                                           s_dim, sample_res, None, None,
                                           activation=nn.ReLU)
 
+        if next_token_num != token_num:
+            self.short_cut = nn.Linear(token_num, next_token_num)
+        else:
+            self.short_cut = nn.Identity()
 
     def forward(self, x: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
         """
@@ -349,6 +349,9 @@ class ModulatedGridLinear(nn.Module):
         x = self.cross_linear(x)
         if self.inter_filter:
             x = self.hash_filter(x, s)
-        x = F.layer_norm(x + x_ori, (x.size(-1),))
+        x_ori = self.short_cut(x_ori.permute(0, 2, 1))
+        x = x + x_ori
+        x = x.permute(0, 2, 1)
+        x = F.layer_norm(x, (x.size(-1),))
         return x
 
