@@ -12,6 +12,7 @@ from torch_utils import persistence
 from hash_encoding import HashTableGenerator
 from hash_encoding.layers import ModulatedLinear
 from hash_encoding.modules import StackedModulatedMLP
+from hash_encoding.modules import StackedModulatedSirenMLP
 from hash_encoding.other_networks import MappingNetwork
 from hash_encoding.other_networks import MiniLinearDecoder
 from hash_encoding.other_networks import SynthesisStack
@@ -51,6 +52,8 @@ class HashGenerator(nn.Module):
                  shrink_down: bool=False,
                  no_norm_layer: bool=False,
                  inter_filter: bool=False,
+                 fixed_token_number: bool=False,
+                 kernel_size: int=15,
                  **kwargs
                  ):
         """
@@ -92,6 +95,8 @@ class HashGenerator(nn.Module):
                     (default: False)
                 no_norm_layer (bool): No normalization layer.
                 inter_filter (bool): Internal filter using conv/filter.
+                fixed_token_number (bool): Fixed token number. (default: False)
+                kernel_size (int): Kernel size of 1d convolution. (default: 15)
         """
         super().__init__()
         self.res_min = res_min
@@ -134,16 +139,22 @@ class HashGenerator(nn.Module):
                                         no_norm_layer=no_norm_layer,
                                         shrink_down =shrink_down,
                                         inter_filter=inter_filter,
+                                        fixed_token_number=fixed_token_number,
+                                        kernel_size=kernel_size,
                                         )
 
         #TODO: substitue this to mini-mlp?
         # Mini linear for resolve hash collision
-        self.mini_linear = StackedModulatedMLP(table_num * 2,
-                                               mlp_hidden,
-                                               mlp_out_dim,
-                                               style_dim,
-                                               3,
-                                               use_layer_norm=False)
+        if not output_skip:
+            self.mini_linear = StackedModulatedMLP(table_num * 2,
+                                                   mlp_hidden,
+                                                   mlp_out_dim,
+                                                   style_dim,
+                                                   3,
+                                                   use_layer_norm=False,
+                                                   table_num=table_num,
+                                                   in_activ=nn.GELU,
+                                                   out_activ=nn.Identity)
 
 
         self.register_buffer('s_avg', torch.zeros([style_dim]))
@@ -206,7 +217,6 @@ class HashGenerator(nn.Module):
                                                          coords,
                                                          self.res_min,
                                                          self.res_max)
-        b = hash_retrieved_feature.size(0)
         mlp_out = self.mini_linear(hash_retrieved_feature, s[:, -1]) # B x N x OUT_DIM
         ### Rendering
         out = self._render(mlp_out, sample_size)

@@ -379,6 +379,7 @@ class SynthesisBlock(torch.nn.Module):
         assert architecture in ['orig', 'skip', 'resnet']
         super().__init__()
         self.in_channels = in_channels
+        self.out_channels = out_channels
         self.w_dim = w_dim
         self.resolution = resolution
         self.img_channels = img_channels
@@ -391,8 +392,8 @@ class SynthesisBlock(torch.nn.Module):
         self.num_conv = 0
         self.num_torgb = 0
 
-        if in_channels == 0:
-            self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
+        #if in_channels == 0:
+        #    self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
 
         if in_channels != 0:
             self.conv0 = SynthesisLayer(in_channels, out_channels, w_dim=w_dim, resolution=resolution, up=2,
@@ -427,8 +428,7 @@ class SynthesisBlock(torch.nn.Module):
 
         # Input.
         if self.in_channels == 0:
-            x = self.const.to(dtype=dtype, memory_format=memory_format)
-            x = x.unsqueeze(0).repeat([ws.shape[0], 1, 1, 1])
+            misc.assert_shape(x, [None, self.out_channels, self.resolution, self.resolution])
         else:
             misc.assert_shape(x, [None, self.in_channels, self.resolution // 2, self.resolution // 2])
             x = x.to(dtype=dtype, memory_format=memory_format)
@@ -510,6 +510,68 @@ class SynthesisNetwork(torch.nn.Module):
                 w_idx += block.num_conv
 
         x = img = None
+        for res, cur_ws in zip(self.block_resolutions, block_ws):
+            block = getattr(self, f'b{res}')
+            x, img = block(x, img, cur_ws, **block_kwargs)
+        return img
+
+    def extra_repr(self):
+        return ' '.join([
+            f'w_dim={self.w_dim:d}, num_ws={self.num_ws:d},',
+            f'img_resolution={self.img_resolution:d}, img_channels={self.img_channels:d},',
+            f'num_fp16_res={self.num_fp16_res:d}'])
+
+#----------------------------------------------------------------------------
+
+@persistence.persistent_class
+class SynthesisNetworkFromHash(torch.nn.Module):
+    def __init__(self,
+        w_dim,                      # Intermediate latent (W) dimensionality.
+        img_resolution,             # Output image resolution.
+        img_channels,               # Number of color channels.
+        channel_base    = 32768,    # Overall multiplier for the number of channels.
+        channel_max     = 512,      # Maximum number of channels in any layer.
+        num_fp16_res    = 4,        # Use FP16 for the N highest resolutions.
+        init_res        = 64,       # Initial resolution
+        **block_kwargs,             # Arguments for SynthesisBlock.
+    ):
+        assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
+        super().__init__()
+        self.w_dim = w_dim
+        self.img_resolution = img_resolution
+        self.img_resolution_log2 = int(np.log2(img_resolution))
+        self.img_channels = img_channels
+        self.num_fp16_res = num_fp16_res
+        self.block_resolutions = [2 ** i for i in range(int(np.log2(init_res)),
+                                                        self.img_resolution_log2 + 1)]
+        channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
+        fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
+
+        self.num_ws = 0
+        for res in self.block_resolutions:
+            in_channels = channels_dict[res // 2] if res > init_res else 0
+            out_channels = channels_dict[res]
+            use_fp16 = (res >= fp16_resolution)
+            is_last = (res == self.img_resolution)
+            block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
+                img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, **block_kwargs)
+            self.num_ws += block.num_conv
+            if is_last:
+                self.num_ws += block.num_torgb
+            setattr(self, f'b{res}', block)
+
+    def forward(self, ws, x, **block_kwargs):
+        block_ws = []
+        with torch.autograd.profiler.record_function('split_ws'):
+            misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
+            ws = ws.to(torch.float32)
+            w_idx = 0
+            for res in self.block_resolutions:
+                block = getattr(self, f'b{res}')
+                block_ws.append(ws.narrow(1, w_idx, block.num_conv + block.num_torgb))
+                w_idx += block.num_conv
+
+        img = None
         for res, cur_ws in zip(self.block_resolutions, block_ws):
             block = getattr(self, f'b{res}')
             x, img = block(x, img, cur_ws, **block_kwargs)

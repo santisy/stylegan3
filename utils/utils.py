@@ -4,6 +4,7 @@ import os
 import numpy as np
 import torch
 import torch.nn.functional as F
+from hash_retrieve_module import HashTableRecon
 
 __all__ = ['sinuous_pos_encode']
 
@@ -40,15 +41,10 @@ def sinuous_pos_encode(table_num: int, token_d: int,
     
     # Phase shift to generate both sin and cos
     shift_p = torch.zeros((token_d_now // 2, 2))
-    shift_p[:, 1] = torch.pi / 2.
+    shift_p[:, 1] = torch.pi / 2. * 3.0
     shift_p = shift_p.flatten()
     shift_p = shift_p.unsqueeze(dim=0).unsqueeze(dim=0)
     pos_encodings = torch.cos(temp_p + shift_p)
-
-    #for i, res in enumerate(res_list):
-    #    dropout_p = np.clip(1 - (res / float(res_max)) ** 2, 0, 1)
-    #    pos_encodings[0, i, :] = F.dropout(pos_encodings[0, i, :],
-    #                                       p=dropout_p)
 
     pos_encodings = pos_encodings.reshape(1, table_num, token_d).detach()
 
@@ -105,9 +101,40 @@ def sample_coords(b: int, img_size: int,
         coords = coords[:, sampled_indices, :]
 
     if not single_batch:
-        coords = coords.repeat(b, 1, 1)
+        coords = coords.repeat((b, 1, 1))
 
     return coords
+
+
+def pos_encodings(res: int, half_len: int):
+    c = torch.arange(res) + 0.5
+    x, y = torch.meshgrid(c, c, indexing='xy')
+    coords = torch.stack((x, y), dim=-1).reshape(-1, 2, 1).float()
+    coords = coords / res * 2.0 - 1.0
+
+    coeff = torch.pow(2, torch.arange(half_len)) * torch.pi
+    coeff = coeff.unsqueeze(dim=0)
+    x1 = torch.cos(coords[:, 0] * coeff)
+    x2 = torch.sin(coords[:, 0] * coeff)
+    y1 = torch.cos(coords[:, 1] * coeff)
+    y2 = torch.sin(coords[:, 1] * coeff)
+
+    total_pos_encodings = torch.cat((x1, y1, x2, y2), dim=-1).unsqueeze(dim=0)
+
+    return total_pos_encodings
+
+
+def hashed_positional_encodings(res: int, table_dim: int, table_num: int,
+                                res_min: int=16):
+
+    coords = sample_coords(1, res).cuda()
+    encodings = pos_encodings(res, table_num//2).cuda()
+
+    out = HashTableRecon.apply(encodings, coords, table_dim, res_min, res)
+    out = out.reshape(1, table_num, -1)
+
+    return out # 1 x table_num x table_dim x 2
+
 
 def get_shuffle_table_indices(table_num: int, table_dim: int) -> torch.Tensor:
     """

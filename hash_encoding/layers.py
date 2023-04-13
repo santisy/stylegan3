@@ -9,17 +9,20 @@ from training.networks_stylegan2 import SynthesisLayer
 from training.networks_stylegan2 import FullyConnectedLayer
 from hash_retrieve_module import HashTableRetrieve
 from hash_retrieve_module import HashTableRecon
+from hash_encoding.svd_linear import SVDLinear
 from utils.utils import sinuous_pos_encode
 from utils.utils import sample_coords
 from utils.utils import get_hash_mask
+from utils.utils import get_shuffle_table_indices
 
-
-class ModulatedLinear(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, s_dim: int,
+class ModulatedConv1d(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, kernel_size: int, s_dim: int,
                  activation: nn.Module=None,
                  bias: bool=True, **kwargs):
         super().__init__()
-        weight = nn.Parameter(torch.randn(out_ch, in_ch))
+        self.kernel_size = kernel_size
+        self.multiplier = 1 / np.sqrt(in_ch)
+        weight = nn.Parameter(torch.randn(out_ch, in_ch, kernel_size))
         self.register_parameter('weight', weight)
         nn.init.xavier_normal_(self.weight)
 
@@ -50,6 +53,64 @@ class ModulatedLinear(nn.Module):
             s = s.repeat(batch_size // s_batch_size, 1)
 
         weight = self.weight
+        w = weight.unsqueeze(dim=0) # 1 x OUT x IN x K
+        w = w * s.reshape(batch_size, 1, -1, 1)
+        decoefs = (w.square().sum(dim=[2, 3]) + 1e-8).rsqrt() # B x O
+
+        s = s.unsqueeze(dim=2) if x.dim() == 3 else s
+        decoefs = decoefs.unsqueeze(dim=2) if x.dim() == 3 else decoefs
+
+        x = x * s
+        x = F.conv1d(x, weight, padding=self.kernel_size//2, bias=self.bias) # B x (N) x O
+        x = x * decoefs
+        x = x * self.multiplier
+        if self.activ is not None:
+            x = self.activ(x)
+
+        return x
+
+
+class ModulatedLinear(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, s_dim: int,
+                 activation: nn.Module=None,
+                 bias: bool=True, **kwargs):
+        super().__init__()
+        weight = nn.Parameter(torch.randn(out_ch, in_ch))
+        self.register_parameter('weight', weight)
+        nn.init.xavier_normal_(self.weight)
+        self.in_ch = in_ch
+
+        if bias:
+            bias = nn.Parameter(torch.zeros(out_ch))
+            self.register_parameter('bias', bias)
+        else:
+            self.bias = None
+        
+        if activation is not None:
+            self.activ = activation()
+        else:
+            self.activ = None
+
+        self.s_mapping = FullyConnectedLayer(s_dim, in_ch, bias_init=1)
+
+    def forward(self, x, s):
+        """
+            x: B x (N) x IN
+            s: B x s_dim
+
+        """
+        batch_size = x.size(0)
+        s = self.s_mapping(s)
+        # NOTE: The batch size may be different
+        s_batch_size = s.size(0)
+        if s_batch_size < batch_size:
+            s = s.repeat(batch_size // s_batch_size, 1)
+
+        weight = self.weight
+        # Pre-normalize
+        weight = weight * (1 / np.sqrt(self.in_ch) / weight.norm(float('inf'), dim=[1,], keepdim=True)) # max_I
+        s = s / s.norm(float('inf'), dim=1, keepdim=True) # max_I
+
         w = weight.unsqueeze(dim=0) # 1 x OUT x IN
         w = w * s.reshape(batch_size, 1, -1)
         decoefs = (w.square().sum(dim=[2]) + 1e-8).rsqrt() # B x O
@@ -62,6 +123,7 @@ class ModulatedLinear(nn.Module):
         x = x * decoefs
         if self.activ is not None:
             x = self.activ(x)
+        x = x.clamp(-255, 255)
 
         return x
 
@@ -131,7 +193,11 @@ class TokenWiseModulatedLinear(nn.Module):
 
 
 class HashFilter(nn.Module):
-    def __init__(self, table_num: int, res_min: int, res_max: int,
+    def __init__(self,
+                 table_num: int,
+                 next_table_num: int,
+                 res_min: int,
+                 res_max: int,
                  style_dim: int,
                  sample_size: int,
                  head_dim: int,
@@ -160,9 +226,11 @@ class HashFilter(nn.Module):
         self.res_min = res_min
         self.res_max = res_max
         self.sample_size = sample_size
+        self.next_table_num = next_table_num
 
         # The `2` here is the entry length in hash tables
         self.ch = ch = table_num * 2
+        self.next_ch = next_table_num * 2
 
         # Randomly sample coords here.
         self.sample_res = sample_res = res_max if sample_res is None else sample_res
@@ -170,14 +238,14 @@ class HashFilter(nn.Module):
         self.register_buffer('coords', coords)
 
         self.conv1 = SynthesisLayer(self.ch,
-                                    self.ch,
+                                    self.next_ch,
                                     style_dim,
                                     sample_res,
                                     kernel_size=3,
                                     up=1,
                                     use_noise=False,
                                     resample_filter=[1,3,3,1],
-                                    activation='lrelu',
+                                    activation='linear',
                                     )
 
     def forward(self, inputs, s):
@@ -202,7 +270,7 @@ class HashFilter(nn.Module):
                                                     ).permute(0, 3, 1, 2)
 
         block_tensor = self.conv1(block_tensor, s) 
-        tokenize_tensor = block_tensor.reshape(batch_size, self.ch, -1
+        tokenize_tensor = block_tensor.reshape(batch_size, self.next_ch, -1
                                                ).permute(0, 2, 1).contiguous()
         
         # Recon the hash tables
@@ -211,35 +279,40 @@ class HashFilter(nn.Module):
                                                  table_dim,
                                                  self.res_min,
                                                  self.res_max)
-
-        outputs = recon_hash_tables.reshape(batch_size, table_num, -1) + inputs
-        outputs = F.layer_norm(outputs, (inputs.size(-1),))
+        outputs = recon_hash_tables.reshape(batch_size, self.next_table_num, -1)
         return outputs
 
 
 class AlongTokenLinear(nn.Module):
-    def __init__(self, ch: int, activation: nn.Module=nn.ReLU,
+    def __init__(self, ch: int, s_dim: int, activation: nn.Module=nn.ReLU,
                  bias: bool=True,
                  upsample: bool=False):
         super().__init__()
         self.ch = ch
         self.upsample = upsample
         next_ch = ch * 2 if upsample else ch
-        self.linear1 = nn.Linear(ch, next_ch, bias=bias)
-        self.activ = activation()
-        self.linear2 = nn.Linear(next_ch, next_ch, bias=bias)
+        # Disable upsample
+        self.linear1 = ModulatedLinear(ch, next_ch, s_dim, activation=activation,
+                                    bias=bias)
+        self.linear2 = ModulatedLinear(next_ch, next_ch, s_dim, activation=None,
+                                    bias=bias)
+        self.activ = nn.Identity()
+        #else:
+        #self.linear1 = nn.Linear(ch, next_ch, bias=bias)
+        #self.linear2 = nn.Linear(next_ch, next_ch, bias=bias)
+        #self.activ = activation()
 
-
-    def forward(self, x):
+    def forward(self, x, s):
         ori_x = x
-        x = self.linear1(x)
+        x = self.linear1(x, s)
         x = self.activ(x)
-        x = self.linear2(x)
+        x = self.linear2(x, s)
         if self.upsample: 
             x = x + torch.cat((ori_x, ori_x), -1)
         else:
             x = x + ori_x
-        x = F.layer_norm(x, (x.size(-1),))
+        x = x / np.sqrt(2)
+        #x = F.layer_norm(x, (x.size(-1),))
         return x
 
 
@@ -264,23 +337,92 @@ class CrossTokenLinear(nn.Module):
             self.linear2 = nn.Linear(next_ch, next_ch, bias=bias)
             self.activ = activation()
 
-
         if next_ch != ch:
-            self.short_cut = nn.Linear(ch, next_ch)
-        else:
-            self.short_cut = nn.Identity()
+            self.short_cut = ModulatedLinear(ch, next_ch, s_dim, activation=None,
+                                             bias=False)
 
     def forward(self, x, s):
         ori_x = x.permute(0, 2, 1)
         x = x.permute(0, 2, 1)
-        x = self.linear1(x)
+        x = self.linear1(x, s)
         x = self.activ(x)
-        x = self.linear2(x)
-        x = x + self.short_cut(ori_x)
-        x = x.permute(0, 2, 1)
-        x = F.layer_norm(x, (x.size(-1),))
+        x = self.linear2(x, s)
+        if self.ch == self.next_ch:
+            x = x + ori_x
+        else:
+            x = x + self.short_cut(ori_x, s)
+        x = x.permute(0, 2, 1) / np.sqrt(2)
+        #x = F.layer_norm(x, (x.size(-1),))
         return x
 
+
+class FuseGridLinear(nn.Module):
+    def __init__(self,
+                 in_ch: int,
+                 out_ch: int,
+                 style_dim: int,
+                 token_num: int,
+                 next_token_num: int,
+                 activation: nn.Module=nn.ReLU,
+                 inter_filter: bool=False,
+                 sample_res: int=256,
+                 **kwargs
+                 ):
+        super().__init__()
+        if next_token_num is None:
+            next_token_num = token_num
+        self.inter_filter = inter_filter
+        if inter_filter:
+            self.hash_filter1 = HashFilter(token_num,
+                                           next_token_num,
+                                           16,
+                                           sample_res,
+                                           style_dim,
+                                           sample_res,
+                                           None,
+                                           None)
+            self.hash_filter2 = HashFilter(next_token_num,
+                                           next_token_num,
+                                           16, sample_res,
+                                           style_dim,
+                                           sample_res,
+                                           None,
+                                           None)
+        else:
+            self.cross_token_linear_01 = ModulatedLinear(token_num, next_token_num,
+                                                         style_dim)
+            self.cross_token_linear_02 = ModulatedLinear(next_token_num, next_token_num,
+                                                         style_dim)
+        self.point_wise_along_token_01 = nn.Linear(in_ch, out_ch)
+        self.activ_01 = activation()
+        self.point_wise_along_token_02 = nn.Linear(out_ch, out_ch)
+        self.activ_02 = activation()
+
+    def forward(self, x, s):
+        ori_x = x
+        x = self.point_wise_along_token_01(x)
+        x = F.layer_norm(x, (x.size(-1),))
+        x = self.activ_01(x)
+        if not self.inter_filter:
+            x = x.permute(0, 2, 1)
+            x = self.cross_token_linear_01(x, s)
+            x = x.permute(0, 2, 1)
+        else:
+            x = self.hash_filter1(x, s)
+        x = self.point_wise_along_token_02(x)
+        x = F.layer_norm(x, (x.size(-1),))
+        x = self.activ_02(x)
+        if not self.inter_filter:
+            x = x.permute(0, 2, 1)
+            x = self.cross_token_linear_02(x, s)
+            x = x.permute(0, 2, 1)
+        else:
+            x = self.hash_filter2(x, s)
+        if x.shape == ori_x.shape:
+            x = x + ori_x
+        x = F.layer_norm(x, (x.size(-1),))
+
+        return x
 
 class ModulatedGridLinear(nn.Module):
     def __init__(self,
@@ -302,7 +444,10 @@ class ModulatedGridLinear(nn.Module):
         next_token_num = next_token_num if next_token_num is not None else token_num
 
         # Along Token linear
-        self.along_linear = AlongTokenLinear(in_ch, activation, bias=bias,
+        self.along_linear = AlongTokenLinear(in_ch,
+                                             s_dim,
+                                             activation,
+                                             bias=bias,
                                              upsample=upsample)
         # TODO: write the masking here
         # hash_mask1 = get_hash_mask(sample_res, res_min, token_num,
@@ -341,7 +486,7 @@ class ModulatedGridLinear(nn.Module):
             x = x + self.pos_encoding.repeat(batch_size, 1, 1)
 
         # Along token linear
-        x = self.along_linear(x)
+        x = self.along_linear(x, s)
         x = self.cross_linear(x, s)
         if self.inter_filter:
             x = self.hash_filter(x, s)

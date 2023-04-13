@@ -14,16 +14,21 @@ from training.networks_stylegan2 import FullyConnectedLayer
 from training.networks_stylegan2 import modulated_conv2d
 from training.networks_stylegan2 import SynthesisLayer
 from training.networks_stylegan2 import Conv2dLayer
+from training.networks_stylegan2 import ToRGBLayer
 
 from hash_encoding.layers import ModulatedLinear
 from hash_encoding.layers import TokenWiseModulatedLinear
 from hash_encoding.layers import ModulatedGridLinear
+from hash_encoding.layers import ModulatedConv1d
+from hash_encoding.layers import FuseGridLinear
 from hash_retrieve_module import HashTableRetrieve
 from hash_encoding.prob_attention import ProbAttention
 from hash_encoding.other_networks import MultiHeadOffsetNetwork
 from utils.utils import get_shuffle_table_indices
 from utils.utils import render
 from utils.utils import sample_coords
+from utils.utils import hashed_positional_encodings
+from siren_pytorch import Siren
 
 
 class MultiHeadAttention(nn.Module):
@@ -195,6 +200,7 @@ class StackedModulatedMLP(nn.Module):
 
         self.module_list = nn.ModuleList()
         self.use_layer_norm = use_layer_norm
+        self.n_layers = n_layers
         linear_layer = partial(ModulatedLinear, table_num=table_num) if not tokenwise_linear else \
                         partial(TokenWiseModulatedLinear, table_num=table_num)
 
@@ -207,11 +213,60 @@ class StackedModulatedMLP(nn.Module):
                 self.module_list.append(linear_layer(h_ch, h_ch, s_dim, activation=in_activ))
 
     def forward(self, x, s):
-        for m in self.module_list:
+        for i, m in enumerate(self.module_list):
             x = m(x, s)
-            if self.use_layer_norm:
-                x = F.layer_norm(x, [x.size(-1),])
         return x
+
+
+class StackedModulatedSirenMLP(nn.Module):
+    def __init__(self, in_ch: int, h_ch: int, out_ch: int, s_dim: int,
+                 n_layers: int,
+                 table_num: int=16,
+                 in_activ: nn.Module=nn.ReLU,
+                 out_activ: nn.Module=nn.Tanh,
+                 tokenwise_linear: bool=False,
+                 use_layer_norm: bool=False):
+        """
+            Args:
+                in_ch: input dimension
+                h_ch: hidden dimension
+                out_ch: output dimension
+                s_dim: style code dimension
+                n_layers: how many layers of MLPs in total
+                    (including input and output layers)
+                table_num (int): number of tables
+                in_activ : inside (hidden layers) activation
+                out_activ : output activation
+                norm_layer (nn.Module): if Other normalization is used
+                use_layer_norm (nn.Module): Use layer normalization
+                tokenwise_linear (bool): If tokenwise linear or not.
+                    (default: False)
+        """
+        super().__init__()
+
+        self.module_list = nn.ModuleList()
+        self.style_layer_list = nn.ModuleList()
+        self.n_layers = n_layers
+
+        for i in range(n_layers):
+            if i == 0:
+                self.module_list.append(Siren(in_ch, h_ch))
+                self.style_layer_list.append(FullyConnectedLayer(s_dim, in_ch))
+            elif i == n_layers - 1:
+                self.module_list.append(nn.Linear(h_ch, out_ch))
+                self.style_layer_list.append(FullyConnectedLayer(s_dim, h_ch))
+            else:
+                self.module_list.append(Siren(h_ch, h_ch))
+                self.style_layer_list.append(FullyConnectedLayer(s_dim, h_ch))
+
+    def forward(self, x, s):
+        b = x.size(0)
+        for i, (m, s_layer) in enumerate(zip(self.module_list, self.style_layer_list)):
+            offset_phases = s_layer(s).reshape(b, 1, -1)
+            x = m(x + offset_phases)
+            #if i != self.n_layers - 1:
+            #    x = F.layer_norm(x, [x.size(-1),])
+        return F.tanh(x)
 
 
 class StylelizedTransformerBlock(nn.Module):
@@ -373,31 +428,109 @@ class StackedModulatedGridLinear(nn.Module):
 
         super().__init__()
         self.in_ch = in_ch
+        out_ch =  in_ch * 2 if upsample else in_ch
 
         self.mgl_list = nn.ModuleList()
         for i in range(layer_n):
-            upsample_now = upsample if i==0 else False
+            in_ch_now = in_ch if i == 0 else out_ch
+            out_ch_now = out_ch
             self.mgl_list.append(ModulatedGridLinear(
-                    in_ch,
-                    in_ch,
+                    in_ch_now,
+                    out_ch_now,
                     s_dim,
                     token_num,
+                    next_token_num=next_token_num if i==layer_n-1 else None,
                     activation=activation,
                     inter_filter=inter_filter,
                     sample_res=sample_res,
                     add_pos_encodings=True if (add_pos_encodings and i==0) else False,
-                    next_token_num=next_token_num if i==layer_n-1 else None,
-                    upsample=upsample_now,
                     ))
-            in_ch = in_ch * 2 if upsample_now else in_ch
-            upsample_now = False # reset the upsample flag
 
+        #self.register_buffer('hash_pos_encodings',
+        #                     hashed_positional_encodings(
+        #                     sample_res, in_ch // 2, token_num, res_min=16
+        #))
 
     def forward(self, x, s):
         for l in self.mgl_list:
+            #x = x + self.hash_pos_encodings
             #x = F.layer_norm(l(x, s) + x, (self.in_ch,))
             x = l(x, s)
         return x
+
+class StackedModulatedConv1d(nn.Module):
+    def __init__(self,
+                 ch: int,
+                 s_dim: int,
+                 token_num: int,
+                 layer_n: int,
+                 kernel_size: int=1,
+                 sample_res: int=256,
+                 activation: nn.Module=nn.ReLU,
+                 add_pos_encodings: bool=False,
+                 inter_filter: bool=False,
+                 upsample: bool=False,
+                 **kwargs
+                ):
+
+        super().__init__()
+
+        self.mc1_list = nn.ModuleList()
+        for i in range(layer_n):
+            self.mc1_list.append(ResidualModulatedConv1d(
+                ch, ch, s_dim,
+                kernel_size=kernel_size,
+                activation=activation
+            ))
+
+        self.register_buffer('hash_pos_encodings',
+                             hashed_positional_encodings(
+                             256, token_num // 2, token_num, res_min=16
+        ))
+
+
+    def forward(self, x, s):
+        x = x.permute(0, 2, 1)
+        for l in self.mc1_list:
+            x = x * self.hash_pos_encodings.permute(0, 2, 1)
+            x = l(x, s)
+        x = x.permute(0, 2, 1)
+        return x
+
+
+class ResidualModulatedConv1d(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, s_dim: int,
+                 kernel_size: int=15,
+                 activation: nn.Module=nn.ReLU):
+
+        super().__init__()
+        self.m_conv1d_1 = ModulatedConv1d(in_ch, out_ch,
+                                          kernel_size=kernel_size,
+                                          s_dim=s_dim,
+                                          bias=True)
+
+        self.m_conv1d_2 = ModulatedConv1d(out_ch, out_ch,
+                                          kernel_size=kernel_size,
+                                          s_dim=s_dim,
+                                          bias=True)
+
+        self.activ1 = activation()
+        self.activ2 = activation()
+
+        if in_ch != out_ch:
+            self.shortcut = nn.Conv1d(in_ch, out_ch, 1, bias=False)
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, x, s):
+        ori_x = x
+        x = self.m_conv1d_1(x, s)
+        x = self.activ1(x)
+        x = self.m_conv1d_2(x, s)
+        x = (x + self.shortcut(ori_x))
+        x = F.layer_norm(x, (x.size(-1),))
+        return x
+
 
 class HashUp(nn.Module):
     def __init__(self,
@@ -451,20 +584,21 @@ class HashSideOut(nn.Module):
                  res_min: int,
                  res_max: int,
                  table_num: int,
-                 style_dim: int):
+                 style_dim: int,
+                 activation: nn.Module=nn.GELU,
+                 ):
         super().__init__()
         self.res_min = res_min
         self.res_max = res_max
         self.table_num = table_num
 
-        #self.m_linear = StackedModulatedMLP(table_num*2, 32, 32, style_dim,
+        #self.m_linear = StackedModulatedMLP(table_num*2, 64, 3,
+        #                                    style_dim,
         #                                    n_layers=2,
-        #                                    in_activ=nn.ReLU,
-        #                                    out_activ=nn.ReLU)
-        self.conv2d = SynthesisLayer(table_num*2, 3, style_dim, res_max,
-                                     use_noise=False,
-                                     activation='linear',
-                                     conv_clamp=256)
+        #                                    in_activ=activation,
+        #                                    out_activ=nn.Identity)
+        self.m_linear = ModulatedLinear(table_num*2, 3, style_dim, bias=False)
+        #self.conv2d = ToRGBLayer(table_num*2, 3, style_dim, conv_clamp=256)
         coords = sample_coords(None, res_max, single_batch=True)
         self.register_buffer('coords', coords)
 
@@ -476,20 +610,56 @@ class HashSideOut(nn.Module):
                 s: styled code B x S_DIM
         """
         b = x.shape[0]
-        hash_tables = x.reshape(b, x.shape[1], x.shape[2] // 2, 2)
+        hash_tables = x.reshape(b, x.shape[1], x.shape[2] // 2, 2).contiguous()
         hash_retrieved_feats = HashTableRetrieve.apply(hash_tables,
                                                        self.coords.repeat(b, 1, 1),
                                                        self.res_min,
                                                        self.res_max)
         #feats = self.m_linear(hash_retrieved_feats, s)
         if self.coords.shape[-1] == 2:
-            conv_feats = hash_retrieved_feats.reshape(b,
-                                                      self.res_max,
-                                                      self.res_max,
-                                                      self.table_num*2
-                                                      ).permute(0, 3, 1, 2)
-            return self.conv2d(conv_feats, s)
+            hash_retrieved_feats = self.m_linear(hash_retrieved_feats, s)
+            out = hash_retrieved_feats.reshape(b,
+                                               self.res_max,
+                                               self.res_max,
+                                               -1 
+                                               ).permute(0, 3, 1, 2)
+            return out
         elif self.coords.shape[-1] == 3:
             raise NotImplementedError
         else:
             raise NotImplementedError
+
+
+class ModulatedSiren(nn.Module):
+    def __init__(self,
+                 ch: int, 
+                 style_dim: int,
+                 token_num: int,
+                 layer_n: int,
+                 **kwargs
+                 ):
+        super().__init__()
+        self.style_mapping_layers = nn.ModuleList()
+        self.along_siren_layers = nn.ModuleList()
+        self.cross_linear_layers = nn.ModuleList()
+
+        for _ in range(layer_n):
+            self.style_mapping_layers.append(FullyConnectedLayer(style_dim, ch))
+            self.along_siren_layers.append(Siren(ch, ch, use_bias=False))
+            self.cross_linear_layers.append(nn.Linear(token_num, token_num))
+        
+
+    def forward(self, x, s):
+        b, n, c = x.shape
+        for s_layer, a_layer, c_layer in zip(self.style_mapping_layers,
+                                             self.along_siren_layers,
+                                             self.cross_linear_layers):
+            x_ori = x
+            offset_phases = s_layer(s).reshape(b, 1, c)
+            x = a_layer(x + offset_phases)
+            x = x.permute(0, 2, 1)
+            x = c_layer(x)
+            x = x.permute(0, 2, 1)
+            x = x + x_ori
+
+        return x

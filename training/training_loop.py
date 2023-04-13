@@ -33,8 +33,8 @@ from utils.utils import delete_file
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
     rnd = np.random.RandomState(random_seed)
-    gw = np.clip(7680 // training_set.image_shape[2], 7, 12)
-    gh = np.clip(4320 // training_set.image_shape[1], 4, 12)
+    gw = np.clip(7680 // training_set.image_shape[2], 7, 8)
+    gh = np.clip(4320 // training_set.image_shape[1], 4, 8)
 
     # No labels => show random subset of training samples.
     if not training_set.has_labels:
@@ -425,6 +425,8 @@ def training_loop(
                 stats_tfevents.add_scalar(name, value.mean, global_step=global_step, walltime=walltime)
             for name, value in stats_metrics.items():
                 stats_tfevents.add_scalar(f'Metrics/{name}', value, global_step=global_step, walltime=walltime)
+            for i, hash_encoder in enumerate(G.hash_encoder_list):
+                stats_tfevents.add_histogram(f'Histogram/hash{i:03d}', hash_encoder.embeddings, global_step=global_step) 
             stats_tfevents.flush()
         if progress_fn is not None:
             progress_fn(cur_nimg // 1000, total_kimg)

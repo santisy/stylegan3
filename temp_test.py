@@ -1,9 +1,15 @@
 import torch
-from hash_encoding.layers import ModulatedGridLinear
+from utils.utils import sample_coords
+from utils.utils import pos_encodings
+from hash_retrieve_module import HashTableRecon
 
-input_var = torch.randn(4, 16, 128).cuda()
-style_code = torch.randn(4, 256).cuda()
-mgl = ModulatedGridLinear(128, 128, 256, 16, add_pos_encodings=True).cuda()
+res_min = 16
+table_dim = 512
+table_num = 16
+res = 256
+coords = sample_coords(1, res).cuda()
+encodings = pos_encodings(res, table_num//2).cuda()
 
-out = mgl(input_var, style_code)
+out = HashTableRecon.apply(encodings, coords, 512, 16, 256)
+
 print(out.shape)

@@ -186,6 +186,12 @@ def parse_comma_separated_list(s):
 @click.option('--no_norm_layer', help='No normalization layer.',                                type=bool, default=False, show_default=True)
 @click.option('--img_size',     help='resize_img to something else.',                           type=int, default=-1, show_default=True)
 @click.option('--inter_filter', help='Among linear use inter conv/filter.',                     type=bool, default=False, show_default=True)
+@click.option('--fixed_token_number', help='The number of token number is fixed.',              type=bool, default=False, show_default=True)
+@click.option('--kernel_size', help='Kernel size of 1d convolution.',                           type=int, default=15, show_default=True)
+@click.option('--init_res', help='Initial resolution retrieved from hash table.',               type=int, default=64, show_default=True)
+@click.option('--level_dim', help='The dimension of each entry of hash table.',                 type=int, default=4, show_default=True)
+@click.option('--feat_coord_dim', help='Style to hyperspace coordinate dimension.',             type=int, default=8, show_default=True)
+@click.option('--dummy_hash_table', help='Dummy output of the hash table',                      type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -214,7 +220,7 @@ def main(**kwargs):
     # Initialize config.
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
     c = dnnlib.EasyDict() # Main config dict.
-    c.G_kwargs = dnnlib.EasyDict(class_name='training.hash_generator.HashGenerator',
+    c.G_kwargs = dnnlib.EasyDict(class_name='training.hash_retrieve_generator.HashRetrieveGenerator',
                                  z_dim=opts.z_dim,
                                  res_min=opts.res_min,
                                  head_dim=opts.head_dim,
@@ -237,6 +243,12 @@ def main(**kwargs):
                                  shrink_down=opts.shrink_down,
                                  no_norm_layer=opts.no_norm_layer,
                                  inter_filter=opts.inter_filter,
+                                 fixed_token_number=opts.fixed_token_number,
+                                 kernel_size=opts.kernel_size,
+                                 init_res=opts.init_res,
+                                 level_dim=opts.level_dim,
+                                 feat_coord_dim=opts.feat_coord_dim,
+                                 dummy_hash_table=opts.dummy_hash_table
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)

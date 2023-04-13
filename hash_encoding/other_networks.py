@@ -10,10 +10,12 @@ import torch.nn.functional as F
 
 from training.networks_stylegan2 import FullyConnectedLayer
 from training.networks_stylegan2 import SynthesisLayer
-from utils.utils import smooth_ceiling
 
 
 flatten=lambda l: sum(map(flatten,l),[]) if isinstance(l,list) else [l]
+
+def normalize_2nd_moment(x, dim=1, eps=1e-8):
+    return x * (x.square().mean(dim=dim, keepdim=True) + eps).rsqrt()
 
 class MappingNetwork(nn.Module):
     def __init__(self,
@@ -66,6 +68,7 @@ class MappingNetwork(nn.Module):
                                              for _ in range(split_depth)]))
 
     def forward(self, z: torch.Tensor):
+        z = normalize_2nd_moment(z.to(torch.float32))
         s = self.main_path(z)
         if self.two_style_code:
             s1 = self.s1_branch(s)
