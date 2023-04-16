@@ -13,6 +13,8 @@ from utils.dist_utils import dprint
 __all__ = ['HashRetrieveGenerator']
 
 FEAT_COORD_DIM_PER_TABLE = 2
+STYLE_COORD_DIM_PER_TABLE = 3
+STYLE_DIM_PER_TABLE = 16
 
 @persistence.persistent_class
 class HashRetrieveGenerator(nn.Module):
@@ -30,6 +32,10 @@ class HashRetrieveGenerator(nn.Module):
                  init_dim: int=256,
                  c_dim: int=1,
                  dummy_hash_table: bool=False,
+                 tile_coord: bool=False,
+                 discrete_all: bool=False,
+                 mini_linear_n_layers: int=3,
+                 additional_first_shortcut: bool=False,
                  **kwargs):
         """
             Args:
@@ -52,15 +58,24 @@ class HashRetrieveGenerator(nn.Module):
                     (default: 256)
                 dummy_hash_table (bool): dummy hash table output for ablation
                     study. (default: False)
+                tile_coord (bool): tile coord with spatial coordinates or not.
+                    (default: False)
+                discrete_all (bool): If true discrete the style code also.
+                    (default: False)
+                mini_linear_n_layers (int): Mini-linear n layers. (default: 3)
+                additional_first_shortcut (bool): Additional fisrt shortcut.
+                    (default: False)
         """
 
         super().__init__()
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.hash_encoder_num = feat_coord_dim // FEAT_COORD_DIM_PER_TABLE
+        self.style_hash_encoder_num = style_dim // STYLE_DIM_PER_TABLE
         self.init_dim = init_dim
         self.init_res = init_res
         self.style_dim = style_dim
+        self.discrete_all = discrete_all
 
         self.s_mapping = MappingNetwork(in_ch=z_dim,
                                         map_depth=map_depth,
@@ -72,7 +87,7 @@ class HashRetrieveGenerator(nn.Module):
 
         self.hash_encoder_list = nn.ModuleList()
         for _ in range(self.hash_encoder_num):
-            self.hash_encoder_list.append(GridEncoder(input_dim=FEAT_COORD_DIM_PER_TABLE + 2, # Now only allows 16 + 2 or 16 + 3
+            self.hash_encoder_list.append(GridEncoder(input_dim=FEAT_COORD_DIM_PER_TABLE + 2,
                                             num_levels=table_num,
                                             level_dim=level_dim,
                                             base_resolution=res_min,
@@ -81,16 +96,39 @@ class HashRetrieveGenerator(nn.Module):
                                             style_dim=style_dim,  
                                             feat_coord_dim=FEAT_COORD_DIM_PER_TABLE,
                                             out_dim=init_dim // self.hash_encoder_num,
-                                            dummy_hash_table=dummy_hash_table
+                                            dummy_hash_table=dummy_hash_table,
+                                            tile_coord=tile_coord,
+                                            mini_linear_n_layers=mini_linear_n_layers
                                             ))
+
+        if discrete_all:
+            self.style_encoder_list = nn.ModuleList()
+            for _ in range(self.style_hash_encoder_num):
+                self.style_encoder_list.append(GridEncoder(input_dim=STYLE_COORD_DIM_PER_TABLE, 
+                                                num_levels=table_num,
+                                                level_dim=level_dim,
+                                                base_resolution=4,
+                                                log2_hashmap_size=table_size_log2,
+                                                desired_resolution=64,
+                                                style_dim=style_dim,  
+                                                feat_coord_dim=STYLE_COORD_DIM_PER_TABLE,
+                                                out_dim=style_dim // self.style_hash_encoder_num,
+                                                dummy_hash_table=dummy_hash_table,
+                                                tile_coord=True,
+                                                no_modulated_linear=True,
+                                                mini_linear_n_layers=mini_linear_n_layers
+                                                ))
+
+
 
         self.synthesis_network = SynthesisNetworkFromHash(style_dim,
                                                           res_max,
                                                           3,
                                                           channel_base=32768,
                                                           channel_max=self.init_dim,
-                                                          num_fp16_res=2,
+                                                          num_fp16_res=0,
                                                           init_res=init_res,
+                                                          additional_first_shortcut=additional_first_shortcut
                                                           )
 
         dprint('Finished building hash table generator.', color='g')
@@ -124,18 +162,29 @@ class HashRetrieveGenerator(nn.Module):
                 linear_fuse_ration (float): If None, then we would fuse the 
                     lower level output with larger level. Fading in.
         """
-        ori_s = s
+        modulation_s = s
+        if self.discrete_all:
+            s_input = s[:, 0]
+            # Get the style dim also from the hash table
+            s_collect = []
+            for i in range(self.style_hash_encoder_num):
+                s_collect.append(self.style_encoder_list[i](s_input)) 
+            modulation_s = torch.cat(s_collect, dim=-1)
+            modulation_s = modulation_s.unsqueeze(dim=1).repeat((1, self.synthesis_network.num_ws, 1))
+
         b = s.size(0)
         coords = sample_coords(b, self.init_res).to(s.device) # [-1, 1], shape (B x N) x (2 or 3)
         s = s[:, 0]
         coords = coords.reshape(-1, 2)
         feat_collect = []
         for i in range(self.hash_encoder_num):
-            feat_collect.append(self.hash_encoder_list[i](coords, s))
+            feat_collect.append(self.hash_encoder_list[i](coords,
+                                                          s,
+                                                          modulation_s[:, 0]))
         feats = torch.cat(feat_collect, dim=-1)
         feats = feats.reshape(b, self.init_res, self.init_res, self.init_dim)
         feats = feats.permute(0, 3, 1, 2)
-        out = self.synthesis_network(ori_s, feats)
+        out = self.synthesis_network(modulation_s, feats)
         
         return out
 

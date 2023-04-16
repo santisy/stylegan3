@@ -374,6 +374,7 @@ class SynthesisBlock(torch.nn.Module):
         use_fp16                = False,        # Use FP16 for this block?
         fp16_channels_last      = False,        # Use channels-last memory format with FP16?
         fused_modconv_default   = True,         # Default value of fused_modconv. 'inference_only' = True for inference, False for training.
+        additional_output_skip  = False,        # Additional output skip
         **layer_kwargs,                         # Arguments for SynthesisLayer.
     ):
         assert architecture in ['orig', 'skip', 'resnet']
@@ -388,6 +389,7 @@ class SynthesisBlock(torch.nn.Module):
         self.use_fp16 = use_fp16
         self.channels_last = (use_fp16 and fp16_channels_last)
         self.fused_modconv_default = fused_modconv_default
+        self.additional_output_skip = additional_output_skip
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         self.num_conv = 0
         self.num_torgb = 0
@@ -533,6 +535,7 @@ class SynthesisNetworkFromHash(torch.nn.Module):
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 4,        # Use FP16 for the N highest resolutions.
         init_res        = 64,       # Initial resolution
+        additional_first_shortcut = False, # 
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
         assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
@@ -554,7 +557,9 @@ class SynthesisNetworkFromHash(torch.nn.Module):
             use_fp16 = (res >= fp16_resolution)
             is_last = (res == self.img_resolution)
             block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
-                img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, **block_kwargs)
+                img_channels=img_channels, is_last=is_last, use_fp16=use_fp16,
+                additional_output_skip=additional_first_shortcut and res==init_res,
+                **block_kwargs)
             self.num_ws += block.num_conv
             if is_last:
                 self.num_ws += block.num_torgb

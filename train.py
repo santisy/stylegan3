@@ -192,6 +192,11 @@ def parse_comma_separated_list(s):
 @click.option('--level_dim', help='The dimension of each entry of hash table.',                 type=int, default=4, show_default=True)
 @click.option('--feat_coord_dim', help='Style to hyperspace coordinate dimension.',             type=int, default=8, show_default=True)
 @click.option('--dummy_hash_table', help='Dummy output of the hash table',                      type=bool, default=False, show_default=True)
+@click.option('--tile_coord', help='If true all cordinates tiled once',                         type=bool, default=False, show_default=True)
+@click.option('--discrete_all', help='Discretize all',                                          type=bool, default=False, show_default=True)
+@click.option('--mini_linear_n_layers', help='Mini-linear n layers.',                           type=int, default=2, show_default=True)
+@click.option('--eps_g', help='Epsilon of Adam optimizer of generator.',                        type=float, default=1e-15, show_default=True)
+@click.option('--additional_first_shortcut', help='Additional first shortcut in block',         type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -248,10 +253,13 @@ def main(**kwargs):
                                  init_res=opts.init_res,
                                  level_dim=opts.level_dim,
                                  feat_coord_dim=opts.feat_coord_dim,
-                                 dummy_hash_table=opts.dummy_hash_table
+                                 dummy_hash_table=opts.dummy_hash_table,
+                                 tile_coord=opts.tile_coord,
+                                 discrete_all=opts.discrete_all,
+                                 mini_linear_n_layers=opts.mini_linear_n_layers,
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
-    c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
+    c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)
     c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
     c.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss')
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2)

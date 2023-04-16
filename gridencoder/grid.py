@@ -6,6 +6,7 @@ from torch.autograd import Function
 from torch.autograd.function import once_differentiable
 from torch.cuda.amp import custom_bwd, custom_fwd 
 from training.networks_stylegan2 import FullyConnectedLayer
+from hash_encoding.other_networks import MappingNetwork
 from hash_encoding.modules import StackedModulatedMLP
 
 try:
@@ -98,7 +99,9 @@ class GridEncoder(nn.Module):
                  per_level_scale=2, base_resolution=16, log2_hashmap_size=19,
                  desired_resolution=None, gridtype='hash',
                  align_corners=False, style_dim=256, feat_coord_dim=16,
-                 out_dim=64, dummy_hash_table=False):
+                 out_dim=64, dummy_hash_table=False, tile_coord=False,
+                 mini_linear_n_layers=3, no_modulated_linear=False,
+                 ):
         super().__init__()
 
         # the finest resolution desired at the last level, if provided, overridee per_level_scale
@@ -118,6 +121,9 @@ class GridEncoder(nn.Module):
         self.align_corners = align_corners
         self.feat_coord_dim = feat_coord_dim
         self.dummy_hash_table = dummy_hash_table
+        self.tile_coord = tile_coord
+        self.out_total_pixel = desired_resolution * desired_resolution
+        self.no_modulated_linear = no_modulated_linear
 
         if self.dummy_hash_table:
             self.register_buffer('const_input', torch.randn(1,
@@ -125,19 +131,27 @@ class GridEncoder(nn.Module):
                                                             self.hash_out_dim,
                                                             ))
 
-        self.style_mapping = FullyConnectedLayer(style_dim,
-                                                 feat_coord_dim * desired_resolution * desired_resolution,
+        s_out_dim = feat_coord_dim if tile_coord else feat_coord_dim * desired_resolution * desired_resolution
+        self.style_mapping = FullyConnectedLayer(style_dim, s_out_dim,
                                                  activation='sigmoid',
                                                  bias_init=1)
 
-        self.mini_linear = StackedModulatedMLP(self.hash_out_dim,
-                                               out_dim * 2,
-                                               out_dim,
-                                               style_dim,
-                                               3,
-                                               in_activ=nn.LeakyReLU,
-                                               out_activ=nn.Identity
-                                               )
+        if not no_modulated_linear:
+            self.mini_linear = StackedModulatedMLP(self.hash_out_dim,
+                                                self.hash_out_dim,
+                                                out_dim,
+                                                style_dim,
+                                                mini_linear_n_layers,
+                                                in_activ=nn.LeakyReLU,
+                                                out_activ=nn.Identity
+                                                )
+        else:
+            self.mini_linear = MappingNetwork(in_ch=self.hash_out_dim,
+                                              map_depth=mini_linear_n_layers,
+                                              style_dim=out_dim,
+                                              hidden_ch=self.hash_out_dim,
+                                              use_layer_norm=False,
+                                              two_style_code=False)
 
         # allocate parameters
         offsets = []
@@ -167,25 +181,30 @@ class GridEncoder(nn.Module):
     def __repr__(self):
         return f"GridEncoder: input_dim={self.input_dim} num_levels={self.num_levels} level_dim={self.level_dim} resolution={self.base_resolution} -> {int(round(self.base_resolution * self.per_level_scale ** (self.num_levels - 1)))} per_level_scale={self.per_level_scale:.4f} params={tuple(self.embeddings.shape)} gridtype={self.gridtype} align_corners={self.align_corners}"
     
-    def forward(self, inputs, s, bound=1):
+    def forward(self, inputs, s=None, modulation_s=None, bound=1):
         """
             Args:
                 inputs: [..., input_dim], normalized real world positions in [-bound, bound]
-                s: [..., style_dim],  the style code
+                s: [..., style_dim],  the style code, to encode the style coordinates
+                modulation_s: to modulate the minilinear if provided.
                 return: [..., num_levels * level_dim]
         """
-        b = s.shape[0]
-        if self.dummy_hash_table:
-            outputs = self.const_input.repeat((b, 1, 1))
-            outputs = self.mini_linear(outputs, s)
-            outputs = outputs.reshape(-1, self.out_dim)
-            return outputs
+        if not self.no_modulated_linear:
+            b = s.shape[0]
+            if self.dummy_hash_table:
+                outputs = self.const_input.repeat((b, 1, 1))
+                outputs = self.mini_linear(outputs, s)
+                outputs = outputs.reshape(-1, self.out_dim)
+                return outputs
 
-
-
-        s_coords = self.style_mapping(s)
-        s_coords = s_coords.reshape(-1, self.feat_coord_dim)
-        inputs = torch.cat([inputs, s_coords], dim=-1)
+            s_coords = self.style_mapping(s)
+            if self.tile_coord:
+                s_coords = s_coords.unsqueeze(dim=1).repeat((1, self.out_total_pixel, 1))
+            s_coords = s_coords.reshape(-1, self.feat_coord_dim)
+            inputs = torch.cat([inputs, s_coords], dim=-1)
+        else:
+            b = inputs.shape[0]
+            inputs = self.style_mapping(inputs)
         
         #print('inputs', inputs.shape, inputs.dtype, inputs.min().item(), inputs.max().item())
 
@@ -196,7 +215,11 @@ class GridEncoder(nn.Module):
         outputs = outputs.view(prefix_shape + [self.hash_out_dim])
 
         outputs = outputs.reshape(b, -1, self.hash_out_dim)
-        outputs = self.mini_linear(outputs, s)
+        if not self.no_modulated_linear:
+            outputs = self.mini_linear(outputs, modulation_s)
+        else:
+            outputs = outputs.reshape(b, self.hash_out_dim)
+            outputs, _ = self.mini_linear(outputs)
         outputs = outputs.reshape(-1, self.out_dim)
 
         #print('outputs', outputs.shape, outputs.dtype, outputs.min().item(), outputs.max().item())
