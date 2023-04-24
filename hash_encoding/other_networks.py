@@ -26,6 +26,7 @@ class MappingNetwork(nn.Module):
                  use_layer_norm: bool=False,
                  two_style_code: bool=False,
                  split_depth: int=2,
+                 lr_multiplier: float=1.0,
                  activation: nn.Module=nn.LeakyReLU):
         """
             Args:
@@ -39,6 +40,7 @@ class MappingNetwork(nn.Module):
                 two_style_code (bool): Output two style codes or not.
                 split_depth (int): If two style code would be output, what is
                     the depth of each MLPs. (default: 4)
+                lr_multiplier (float): learning rate multiplier. (default: 1.0)
                 activation (nn.Module): Activation function
         """
         super().__init__()
@@ -49,7 +51,8 @@ class MappingNetwork(nn.Module):
         else:
             layer_norm = nn.Identity
         linear_layer = lambda in_ch, out_ch: [FullyConnectedLayer(
-                                                in_ch, out_ch, activation='lrelu'),
+                                                in_ch, out_ch, activation='lrelu',
+                                                lr_multiplier=lr_multiplier),
                                               layer_norm(out_ch)]
 
         # Main mapping path

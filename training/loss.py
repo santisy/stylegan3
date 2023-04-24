@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import upfirdn2d
+from training.vgg_perceptual_loss import VGGPerceptualLoss
 
 #----------------------------------------------------------------------------
 
@@ -34,7 +35,10 @@ class StyleGAN2Loss(Loss):
                  pl_decay=0.01,
                  pl_no_weight_grad=False,
                  blur_init_sigma=0,
-                 blur_fade_kimg=0):
+                 blur_fade_kimg=0,
+                 encoder_flag=False,
+                 l2loss_weight=20.0,
+                 ):
         super().__init__()
         self.device             = device
         self.G                  = G
@@ -49,15 +53,22 @@ class StyleGAN2Loss(Loss):
         self.pl_mean            = torch.zeros([], device=device)
         self.blur_init_sigma    = blur_init_sigma
         self.blur_fade_kimg     = blur_fade_kimg
+        self.encoder_flag       = encoder_flag
+        self.l2loss_weight = l2loss_weight
+        if encoder_flag:
+            self.vgg_perceptual_loss = VGGPerceptualLoss().to(device)
 
-    def run_G(self, z, c, update_emas=False):
+    def run_G(self, z, c, real_img, update_emas=False):
         ws1, ws2 = self.G.mapping(z, c, update_emas=update_emas)
         if self.style_mixing_prob > 0:
             with torch.autograd.profiler.record_function('style_mixing'):
                 cutoff = torch.empty([], dtype=torch.int64, device=ws.device).random_(1, ws.shape[1])
                 cutoff = torch.where(torch.rand([], device=ws.device) < self.style_mixing_prob, cutoff, torch.full_like(cutoff, ws.shape[1]))
                 ws[:, cutoff:] = self.G.mapping(torch.randn_like(z), c, update_emas=False)[:, cutoff:]
-        img = self.G.synthesis(ws1, ws2, z, update_emas=update_emas)
+        if not self.encoder_flag:
+            img = self.G.synthesis(ws1, ws2, z, update_emas=update_emas)
+        else:
+            img = self.G.synthesis(ws1, ws2, real_img, update_emas=update_emas)
         return img, None
 
     def run_D(self, img, c, blur_sigma=0, update_emas=False):
@@ -82,12 +93,22 @@ class StyleGAN2Loss(Loss):
         # Gmain: Maximize logits for generated images.
         if phase in ['Gmain', 'Gboth']:
             with torch.autograd.profiler.record_function('Gmain_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c)
+                gen_img, _gen_ws = self.run_G(gen_z, gen_c, real_img)
                 gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
                 training_stats.report('Loss/G/loss', loss_Gmain)
+                if self.encoder_flag:
+                    # L2 Loss
+                    loss_l2 = F.mse_loss(gen_img, real_img) * self.l2loss_weight
+                    loss_Gmain += loss_l2
+                    training_stats.report('Loss/G/l2loss', loss_l2)
+                    # VGG loss
+                    loss_vgg = self.vgg_perceptual_loss(gen_img, real_img) * 5.0
+                    loss_Gmain += loss_vgg
+                    training_stats.report('Loss/G/vggloss', loss_vgg)
+
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
 
@@ -113,7 +134,7 @@ class StyleGAN2Loss(Loss):
         loss_Dgen = 0
         if phase in ['Dmain', 'Dboth']:
             with torch.autograd.profiler.record_function('Dgen_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, update_emas=True)
+                gen_img, _gen_ws = self.run_G(gen_z, gen_c, real_img, update_emas=True)
                 gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma, update_emas=True)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())

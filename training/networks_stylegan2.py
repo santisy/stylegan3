@@ -375,6 +375,7 @@ class SynthesisBlock(torch.nn.Module):
         fp16_channels_last      = False,        # Use channels-last memory format with FP16?
         fused_modconv_default   = True,         # Default value of fused_modconv. 'inference_only' = True for inference, False for training.
         additional_output_skip  = False,        # Additional output skip
+        additional_decoder_conv = False,        # Additional decoder convolution
         **layer_kwargs,                         # Arguments for SynthesisLayer.
     ):
         assert architecture in ['orig', 'skip', 'resnet']
@@ -393,6 +394,7 @@ class SynthesisBlock(torch.nn.Module):
         self.register_buffer('resample_filter', upfirdn2d.setup_filter(resample_filter))
         self.num_conv = 0
         self.num_torgb = 0
+        self.additional_decoder_conv = additional_decoder_conv
 
         #if in_channels == 0:
         #    self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
@@ -405,6 +407,11 @@ class SynthesisBlock(torch.nn.Module):
         self.conv1 = SynthesisLayer(out_channels, out_channels, w_dim=w_dim, resolution=resolution,
             conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
         self.num_conv += 1
+
+        if additional_decoder_conv:
+            self.conv_ex = SynthesisLayer(out_channels, out_channels, w_dim=w_dim, resolution=resolution,
+                conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
+            self.num_conv += 1
 
         if is_last or architecture == 'skip':
             self.torgb = ToRGBLayer(out_channels, img_channels, w_dim=w_dim,
@@ -446,6 +453,9 @@ class SynthesisBlock(torch.nn.Module):
         else:
             x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+        
+        if self.additional_decoder_conv:
+            x = self.conv_ex(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
         # ToRGB.
         if img is not None:
@@ -536,6 +546,7 @@ class SynthesisNetworkFromHash(torch.nn.Module):
         num_fp16_res    = 4,        # Use FP16 for the N highest resolutions.
         init_res        = 64,       # Initial resolution
         additional_first_shortcut = False, # 
+        additional_decoder_conv   = False,
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
         assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
@@ -559,6 +570,7 @@ class SynthesisNetworkFromHash(torch.nn.Module):
             block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
                 img_channels=img_channels, is_last=is_last, use_fp16=use_fp16,
                 additional_output_skip=additional_first_shortcut and res==init_res,
+                additional_decoder_conv=additional_decoder_conv,
                 **block_kwargs)
             self.num_ws += block.num_conv
             if is_last:
@@ -812,14 +824,20 @@ class Discriminator(torch.nn.Module):
         block_kwargs        = {},       # Arguments for DiscriminatorBlock.
         mapping_kwargs      = {},       # Arguments for MappingNetwork.
         epilogue_kwargs     = {},       # Arguments for DiscriminatorEpilogue.
+        encoder_flag        = False,    # If true, do patch
+        disable_patch_gan   = False
     ):
         super().__init__()
         self.c_dim = c_dim
         self.img_resolution = img_resolution
         self.img_resolution_log2 = int(np.log2(img_resolution))
         self.img_channels = img_channels
-        self.block_resolutions = [2 ** i for i in range(self.img_resolution_log2, 2, -1)]
-        channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions + [4]}
+        if disable_patch_gan:
+            encoder_flag = False
+        self.encoder_flag = encoder_flag
+        res_min_log2 = 2 if not encoder_flag else 3
+        self.block_resolutions = [2 ** i for i in range(self.img_resolution_log2, res_min_log2, -1)]
+        channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions + [8, 4]}
         fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
 
         if cmap_dim is None:
@@ -829,6 +847,7 @@ class Discriminator(torch.nn.Module):
 
         common_kwargs = dict(img_channels=img_channels, architecture=architecture, conv_clamp=conv_clamp)
         cur_layer_idx = 0
+        out_channels = None
         for res in self.block_resolutions:
             in_channels = channels_dict[res] if res < img_resolution else 0
             tmp_channels = channels_dict[res]
@@ -840,7 +859,10 @@ class Discriminator(torch.nn.Module):
             cur_layer_idx += block.num_layers
         if c_dim > 0:
             self.mapping = MappingNetwork(z_dim=0, c_dim=c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None, **mapping_kwargs)
-        self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs)
+        if not self.encoder_flag:
+            self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs)
+        else:
+            self.conv_out = Conv2dLayer(out_channels, 1, kernel_size=1, activation='linear', conv_clamp=conv_clamp)
 
     def forward(self, img, c, update_emas=False, **block_kwargs):
         _ = update_emas # unused
@@ -852,7 +874,10 @@ class Discriminator(torch.nn.Module):
         cmap = None
         if self.c_dim > 0:
             cmap = self.mapping(None, c)
-        x = self.b4(x, img, cmap)
+        if not self.encoder_flag:
+            x = self.b4(x, img, cmap)
+        else:
+            x = self.conv_out(x)
         return x
 
     def extra_repr(self):

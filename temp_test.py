@@ -2,6 +2,8 @@ import torch
 from utils.utils import sample_coords
 from utils.utils import pos_encodings
 from hash_retrieve_module import HashTableRecon
+from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
+
 
 res_min = 16
 table_dim = 512

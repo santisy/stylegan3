@@ -92,16 +92,71 @@ class _grid_encode(Function):
 
 grid_encode = _grid_encode.apply
 
+def normalize_2nd_moment(x, dim=1, eps=1e-8):
+    return x * (x.square().mean(dim=dim, keepdim=True) + eps).rsqrt()
+
 
 class GridEncoder(nn.Module):
     def __init__(self,
-                 input_dim=3, num_levels=16, level_dim=2,
-                 per_level_scale=2, base_resolution=16, log2_hashmap_size=19,
-                 desired_resolution=None, gridtype='hash',
-                 align_corners=False, style_dim=256, feat_coord_dim=16,
-                 out_dim=64, dummy_hash_table=False, tile_coord=False,
-                 mini_linear_n_layers=3, no_modulated_linear=False,
+                 input_dim=3,
+                 num_levels=16,
+                 level_dim=2,
+                 per_level_scale=2,
+                 base_resolution=4,
+                 log2_hashmap_size=19,
+                 desired_resolution=64,
+                 gridtype='hash',
+                 align_corners=False,
+                 style_dim=256,
+                 feat_coord_dim=2,
+                 out_dim=16,
+                 out_dim2=16,
+                 dummy_hash_table=False,
+                 tile_coord=True,
+                 mini_linear_n_layers=3,
+                 no_modulated_linear=False,
+                 direct_coord_input=False,
+                 one_hash_group=False,
                  ):
+        """
+            Args:
+                input_dim (int): Total retrive coordinates to the hash table.
+                    (default: 3)
+                num_levels (int): The resolution levels in hash tables. 
+                    (default: 16)
+                level_dim (int): The dimension of each entries in hash table.
+                    (default: 2)
+                per_level_scale (float): The scaling of resolutions among 
+                    hash tables. If desired resolution (max resolution)
+                    is provided, this value will be caculated based on 
+                    desired resoluton instead. (default: 2)
+                base_resolution (int): Basic resolution (smallest res).
+                    (default: 4)
+                log2_hashmap_size (int): Log2 hashmap size for each hash table.
+                    (default: 19)
+                desired_resolution (int): Desired resolution (max res).
+                    (default: 64)
+                gridtype (str): Grid type. (default: 'hash')
+                align_corners (bool): Align corners. (default: False)
+                style_dim (int): style code input dimension to do modulation or
+                    mapping to coord. (default: 256)
+                feat_coord_dim (int): The mapped dimension of the feature 
+                    coordinate. (default: 2)
+                out_dim (int): Final output feature of this module (after 
+                    pointwise MLP mapping). (default: 16)
+                dummy_hash_table (bool): Dummy hash table. Instead of retrieve 
+                    it is the constant. (default: False)
+                tile_coord (bool): Tiling the feature coord with spatial 
+                    coordinates. (default: True)
+                mini_linear_n_layers (int): The MLP mapping number of layers
+                    after retrieving. (default: 3)
+                no_modulated_linear (bool): If true, the MLP will not be modulated.
+                    (default: False)
+                direct_coord_input (bool): The feature coord is by input instead
+                    of internal mapping. (default: False)
+                one_hash_group (bool): Only one hash group. If so, no modulation,
+                    output actual style code at the same time.
+        """
         super().__init__()
 
         # the finest resolution desired at the last level, if provided, overridee per_level_scale
@@ -116,6 +171,7 @@ class GridEncoder(nn.Module):
         self.base_resolution = base_resolution
         self.hash_out_dim = num_levels * level_dim
         self.out_dim = out_dim
+        self.out_dim2 = out_dim2
         self.gridtype = gridtype
         self.gridtype_id = _gridtype_to_id[gridtype] # "tiled" or "hash"
         self.align_corners = align_corners
@@ -123,7 +179,12 @@ class GridEncoder(nn.Module):
         self.dummy_hash_table = dummy_hash_table
         self.tile_coord = tile_coord
         self.out_total_pixel = desired_resolution * desired_resolution
+        self.one_hash_group = one_hash_group
         self.no_modulated_linear = no_modulated_linear
+        self.direct_coord_input = direct_coord_input
+        if one_hash_group:
+            style_dim = self.hash_out_dim * 2
+
 
         if self.dummy_hash_table:
             self.register_buffer('const_input', torch.randn(1,
@@ -131,10 +192,11 @@ class GridEncoder(nn.Module):
                                                             self.hash_out_dim,
                                                             ))
 
-        s_out_dim = feat_coord_dim if tile_coord else feat_coord_dim * desired_resolution * desired_resolution
-        self.style_mapping = FullyConnectedLayer(style_dim, s_out_dim,
-                                                 activation='sigmoid',
-                                                 bias_init=1)
+        if not direct_coord_input:
+            s_out_dim = feat_coord_dim if tile_coord else feat_coord_dim * desired_resolution * desired_resolution
+            self.style_mapping = FullyConnectedLayer(style_dim, s_out_dim,
+                                                    activation='sigmoid',
+                                                    bias_init=1)
 
         if not no_modulated_linear:
             self.mini_linear = StackedModulatedMLP(self.hash_out_dim,
@@ -152,6 +214,23 @@ class GridEncoder(nn.Module):
                                               hidden_ch=self.hash_out_dim,
                                               use_layer_norm=False,
                                               two_style_code=False)
+
+        if one_hash_group:
+            self.mini_linear2 = MappingNetwork(in_ch=self.hash_out_dim,
+                                               map_depth=mini_linear_n_layers,
+                                               style_dim=out_dim2,
+                                               hidden_ch=self.hash_out_dim,
+                                               lr_multiplier=0.01,
+                                               use_layer_norm=False,
+                                               two_style_code=False)
+                                               
+            self.mini_linear3 = MappingNetwork(in_ch=self.hash_out_dim,
+                                               map_depth=2,
+                                               style_dim=style_dim,
+                                               hidden_ch=self.hash_out_dim,
+                                               lr_multiplier=0.01,
+                                               use_layer_norm=False,
+                                               two_style_code=False)
 
         # allocate parameters
         offsets = []
@@ -181,7 +260,7 @@ class GridEncoder(nn.Module):
     def __repr__(self):
         return f"GridEncoder: input_dim={self.input_dim} num_levels={self.num_levels} level_dim={self.level_dim} resolution={self.base_resolution} -> {int(round(self.base_resolution * self.per_level_scale ** (self.num_levels - 1)))} per_level_scale={self.per_level_scale:.4f} params={tuple(self.embeddings.shape)} gridtype={self.gridtype} align_corners={self.align_corners}"
     
-    def forward(self, inputs, s=None, modulation_s=None, bound=1):
+    def forward(self, inputs, s=None, modulation_s=None, bound=1, b=None):
         """
             Args:
                 inputs: [..., input_dim], normalized real world positions in [-bound, bound]
@@ -189,7 +268,9 @@ class GridEncoder(nn.Module):
                 modulation_s: to modulate the minilinear if provided.
                 return: [..., num_levels * level_dim]
         """
-        if not self.no_modulated_linear:
+        if self.one_hash_group and self.direct_coord_input:
+            inputs = inputs
+        elif not self.no_modulated_linear:
             b = s.shape[0]
             if self.dummy_hash_table:
                 outputs = self.const_input.repeat((b, 1, 1))
@@ -197,14 +278,14 @@ class GridEncoder(nn.Module):
                 outputs = outputs.reshape(-1, self.out_dim)
                 return outputs
 
-            s_coords = self.style_mapping(s)
+            s_coords = self.style_mapping(s) if not self.direct_coord_input else s
             if self.tile_coord:
                 s_coords = s_coords.unsqueeze(dim=1).repeat((1, self.out_total_pixel, 1))
             s_coords = s_coords.reshape(-1, self.feat_coord_dim)
             inputs = torch.cat([inputs, s_coords], dim=-1)
         else:
             b = inputs.shape[0]
-            inputs = self.style_mapping(inputs)
+            inputs = self.style_mapping(inputs) if not self.direct_coord_input else inputs
         
         #print('inputs', inputs.shape, inputs.dtype, inputs.min().item(), inputs.max().item())
 
@@ -215,16 +296,27 @@ class GridEncoder(nn.Module):
         outputs = outputs.view(prefix_shape + [self.hash_out_dim])
 
         outputs = outputs.reshape(b, -1, self.hash_out_dim)
-        if not self.no_modulated_linear:
-            outputs = self.mini_linear(outputs, modulation_s)
+
+
+        # Second output (output style code at the time of outputing spatical feats)
+        if self.one_hash_group:
+            outputs2 = normalize_2nd_moment(outputs.mean(dim=1))
+            modulation_s, _ = self.mini_linear3(outputs2)
+            outputs2, _ = self.mini_linear2(normalize_2nd_moment(outputs2))
+            outputs2 = outputs2.reshape(-1, self.out_dim2)
         else:
-            outputs = outputs.reshape(b, self.hash_out_dim)
-            outputs, _ = self.mini_linear(outputs)
-        outputs = outputs.reshape(-1, self.out_dim)
+            outputs2 = None
+            
+        if not self.no_modulated_linear:
+            outputs1 = self.mini_linear(outputs, modulation_s)
+        else:
+            outputs1 = outputs.reshape(-1, self.hash_out_dim)
+            outputs1, _ = self.mini_linear(outputs1)
 
-        #print('outputs', outputs.shape, outputs.dtype, outputs.min().item(), outputs.max().item())
+        outputs1 = outputs1.reshape(-1, self.out_dim)
 
-        return outputs
+        return outputs1, outputs2
+
 
 class VarGridEncoder(nn.Module):
     def __init__(self, input_dim=3, num_levels=16, level_dim=2, per_level_scale=2, base_resolution=16, log2_hashmap_size=19, desired_resolution=None, gridtype='hash', align_corners=False, hash_entries=None):

@@ -194,9 +194,22 @@ def parse_comma_separated_list(s):
 @click.option('--dummy_hash_table', help='Dummy output of the hash table',                      type=bool, default=False, show_default=True)
 @click.option('--tile_coord', help='If true all cordinates tiled once',                         type=bool, default=False, show_default=True)
 @click.option('--discrete_all', help='Discretize all',                                          type=bool, default=False, show_default=True)
-@click.option('--mini_linear_n_layers', help='Mini-linear n layers.',                           type=int, default=2, show_default=True)
+@click.option('--mini_linear_n_layers', help='Mini-linear n layers.',                           type=int, default=3, show_default=True)
 @click.option('--eps_g', help='Epsilon of Adam optimizer of generator.',                        type=float, default=1e-15, show_default=True)
 @click.option('--additional_first_shortcut', help='Additional first shortcut in block',         type=bool, default=False, show_default=True)
+
+
+@click.option('--encoder_flag', help='Enable encoder training',                                 type=bool, default=False, show_default=True)
+@click.option('--encoder_ch', help='Encoder base ch',                                           type=int, default=32, show_default=False)
+@click.option('--l2loss_weight', help='MSE loss weight',                                        type=float, default=20.0, show_default=True)
+@click.option('--one_hash_group', help='One hash group out.',                                   type=bool, default=False, show_default=True)
+@click.option('--non_style_decoder', help='None style decoder.',                                type=bool, default=False, show_default=True)
+@click.option('--context_coordinates', help='None average coordinates output.',                 type=bool, default=False, show_default=True)
+@click.option('--concat_discriminator', help='Concatenate discriminator.',                      type=bool, default=False, show_default=True)
+@click.option('--disable_patch_gan', help='Disable patch gan.',                                 type=bool, default=False, show_default=True)
+@click.option('--feat_coord_dim_per_table', help='Feat coord per table.',                       type=int, default=2, show_default=True)
+@click.option('--num_downsamples', help='Downsampling number of encoder.',                      type=int, default=5, show_default=True)
+@click.option('--additional_decoder_conv', help='Additional decoder convolution.',              type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -257,6 +270,12 @@ def main(**kwargs):
                                  tile_coord=opts.tile_coord,
                                  discrete_all=opts.discrete_all,
                                  mini_linear_n_layers=opts.mini_linear_n_layers,
+                                 one_hash_group=opts.one_hash_group,
+                                 non_style_decoder=opts.non_style_decoder,
+                                 context_coordinates=opts.context_coordinates,
+                                 feat_coord_dim_per_table=opts.feat_coord_dim_per_table,
+                                 num_downsamples=opts.num_downsamples,
+                                 additional_decoder_conv=opts.additional_decoder_conv
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)
@@ -290,6 +309,15 @@ def main(**kwargs):
     c.image_snapshot_ticks = opts.img_snap
     c.random_seed = c.training_set_kwargs.random_seed = opts.seed
     c.data_loader_kwargs.num_workers = opts.workers
+
+    # Encoder args
+    c.encoder_flag = opts.encoder_flag
+    c.loss_kwargs.encoder_flag = opts.encoder_flag
+    c.loss_kwargs.l2loss_weight = opts.l2loss_weight
+    if opts.encoder_flag:
+        c.G_kwargs.class_name = 'training.hash_autoencoder_generator.HashAutoGenerator'
+    c.D_kwargs.encoder_flag = opts.encoder_flag
+    c.D_kwargs.disable_patch_gan = opts.disable_patch_gan
 
     # Sanity checks.
     if c.batch_size % c.num_gpus != 0:

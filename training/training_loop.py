@@ -123,6 +123,7 @@ def training_loop(
     cudnn_benchmark         = True,     # Enable torch.backends.cudnn.benchmark?
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
+    encoder_flag            = False,    # If we are training encoder (auto-encoder) or not.
 ):
     # Initialize.
     start_time = time.time()
@@ -168,7 +169,12 @@ def training_loop(
     if rank == 0:
         z = torch.empty([batch_gpu, G.z_dim], device=device)
         c = torch.empty([batch_gpu, G.c_dim], device=device)
-        img = misc.print_module_summary(G, [z, c])
+        real_img = torch.empty([batch_gpu, 3,
+                                training_set.resolution,
+                                training_set.resolution],
+                                device=device)
+        G_input = [z, c] if not encoder_flag else [real_img, c]
+        img = misc.print_module_summary(G, G_input)
         misc.print_module_summary(D, [img, c])
 
     # Setup augmentation.
@@ -220,11 +226,16 @@ def training_loop(
     grid_c = None
     if rank == 0:
         print('Exporting sample images...')
-        grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
-        save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
+        grid_size, real_images, labels = setup_snapshot_image_grid(training_set=training_set)
+        save_image_grid(real_images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
-        images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+        grid_imgs = torch.from_numpy(real_images).to(device).float() / 127.5 - 1.0
+        grid_imgs = grid_imgs.split(batch_gpu)
+        if not encoder_flag:
+            images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+        else:
+            images = torch.cat([G_ema(img=img, c=c, noise_mode='const').cpu() for img, c in zip(grid_imgs, grid_c)]).numpy()
         save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
 
     # Initialize logs.
@@ -353,10 +364,16 @@ def training_loop(
 
         # Save image snapshot.
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
-            images = torch.cat([G_ema(z=z,
-                                      c=c,
-                                      noise_mode='const',
-                                      ).cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+            if not encoder_flag:
+                images = torch.cat([G_ema(z=z,
+                                        c=c,
+                                        noise_mode='const',
+                                        ).cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+            else:
+                images = torch.cat([G_ema(img=img,
+                                        c=c,
+                                        noise_mode='const',
+                                        ).cpu() for img, c in zip(grid_imgs, grid_c)]).numpy()
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
             if stats_tfevents is not None:
                 global_step = int(cur_nimg / 1e3)
@@ -391,7 +408,7 @@ def training_loop(
                     delete_file(save_snapshot_list.pop(0))
 
         # Evaluate metrics.
-        if (snapshot_data is not None) and (len(metrics) > 0) and cur_tick != 0:
+        if (snapshot_data is not None) and (len(metrics) > 0) and cur_tick != 0 and not encoder_flag:
             if rank == 0:
                 print('Evaluating metrics...')
             for metric in metrics:
