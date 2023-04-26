@@ -21,7 +21,7 @@ class Dataset(torch.utils.data.Dataset):
                 size (int): The spatial size of the neural coordinates.
                     (default: 16)
         """
-        self._npy_files = glob.glob(os.path.join(folder_path, f'*.npy'))
+        self._npy_files = glob.glob(os.path.join(folder_path, f'*.npz'))
 
         self._dim = dim
         self._size = size
@@ -33,14 +33,16 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         npy_file = self._npy_files[idx]
         with open(npy_file, 'rb') as f:
-            nc_numpy = np.load(f)[0]
+            loaded = np.load(f)
+            mu = loaded['mu']
+            log_var = loaded['log_var']
 
-        if nc_numpy.shape[0] != self._dim:
+        if mu.shape[0] != self._dim:
             raise RuntimeError('Dimension of neural coordinates wrong.'
-                               f' required {self._dim} vs {nc_numpy.shape[0]}')
+                               f' required {self._dim} vs {mu.shape[0]}')
 
-        if nc_numpy.shape[1] != self._size:
+        if mu.shape[1] != self._size:
             raise RuntimeError('Size of neural coordinates wrong.'
-                               f' required {self._size} vs {nc_numpy.shape[1]}')
+                               f' required {self._size} vs {mu.shape[1]}')
 
-        return nc_numpy
+        return mu, log_var

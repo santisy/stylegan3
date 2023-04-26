@@ -4,6 +4,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from torch_utils import persistence
 from hash_encoding.other_networks import MappingNetwork
@@ -38,6 +39,9 @@ class HashAutoGenerator(nn.Module):
                  num_downsamples: int=5,
                  feat_coord_dim_per_table: int=2,
                  additional_decoder_conv: bool=False,
+                 noise_perturb: bool=False,
+                 noise_perturb_sigma: float=2e-3,
+                 use_kl_reg: bool=False,
                  **kwargs):
         """
             Args:
@@ -71,6 +75,11 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 additional_decoder_conv (bool): Additional decoder convolution.
                     (default: False)
+                noise_perturb (bool): Noise perturbation on neural coordinates or
+                    not (default: False)
+                noise_perturb_sigma (bool): The sigma value to perturb the 
+                    neural coordinates (default: 2e-3)
+                use_kl_reg (bool): Use KL regularization or not.
         """
 
         super().__init__()
@@ -81,6 +90,9 @@ class HashAutoGenerator(nn.Module):
         self.init_res = init_res
         self.discrete_all = discrete_all
         self.feat_coord_dim = feat_coord_dim
+        self.noise_perturb = noise_perturb
+        self.noise_perturb_sigma = noise_perturb_sigma
+        self.use_kl_reg = use_kl_reg
 
         self.img_encoder = Encoder(feat_coord_dim=feat_coord_dim,
                                    ch=32,
@@ -88,6 +100,7 @@ class HashAutoGenerator(nn.Module):
                                    num_res_blocks=4,
                                    num_downsamples=num_downsamples,
                                    resolution=res_max,
+                                   use_kl_reg=use_kl_reg
                                    )
 
         self.hash_encoder_list = nn.ModuleList()
@@ -133,7 +146,9 @@ class HashAutoGenerator(nn.Module):
                   s2: torch.Tensor,
                   img: torch.Tensor,
                   update_emas: bool=False,
-                  sample_size: int=None) -> torch.Tensor:
+                  sample_size: int=None,
+                  return_kl_terms: bool=False,
+                  ) -> torch.Tensor:
         """
             Args:
                 s: is the repeated fashion, for the stylemixing regularization
@@ -144,7 +159,17 @@ class HashAutoGenerator(nn.Module):
         """
         b = img.size(0)
 
-        feat_coords = self.img_encoder(img) # B x F_C_C x W x H
+        if not self.use_kl_reg:
+            feat_coords = self.img_encoder(img) # B x F_C_C x W x H
+        else:
+            mu, log_var = self.img_encoder(img)
+            feat_coords = F.sigmoid(torch.randn_like(torch.exp(0.5 * log_var)) + mu)
+
+        if self.noise_perturb:
+            feat_coords = torch.clip(
+                    feat_coords * np.sqrt(1 - self.noise_perturb_sigma) +
+                    torch.randn_like(feat_coords) * np.sqrt(self.noise_perturb_sigma),
+                    0, 1)
 
         # Split the coordinates
         feat_coords_tuple = feat_coords.chunk(self.hash_encoder_num, dim=1)
@@ -178,7 +203,10 @@ class HashAutoGenerator(nn.Module):
         feats = feats.permute(0, 3, 1, 2)
         out = self.synthesis_network(modulation_s, feats)
         
-        return out
+        if not return_kl_terms:
+            return out
+        else:
+            return out, mu, log_var
 
 
     def forward(self, img: torch.Tensor, c=None, update_emas=False, **kwargs):

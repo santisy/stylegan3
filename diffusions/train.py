@@ -3,25 +3,30 @@
 """
 
 import click
+import json
 import math
 import os
 import sys
+import time
 
 import numpy as np
 import torch
-from torch.optim import Adam
-
-from denoising_diffusion_pytorch import Unet, GaussianDiffusion
-
 sys.path.insert(0, '.')
+
+from imagen_pytorch import Unet, Imagen, ImagenTrainer
+from ldm.models.diffusion.ddpm import DDPM
+
 import dnnlib
 import legacy
 from torch_utils import misc
 from training.training_loop import save_image_grid
 import torchvision.utils as tvu
 
+from utils.utils import delete_file
 from diffusions.dataset import Dataset
 from diffusions.decode import decode_nc
+
+
 
 
 @click.command()
@@ -38,43 +43,39 @@ from diffusions.decode import decode_nc
               default=1e-4)
 @click.option('--sample_k', type=int,
               help='How many k images to sample a result and decode',
-              default=10, show_default=True)
+              default=50, show_default=True)
 @click.option('--sample_num', type=int,
               help='Sampling number',
-              default=4, show_default=True)
+              default=5, show_default=True)
 @click.option('--record_k', type=int,
               help='How many k images to record loss',
-              default=4, show_default=True)
+              default=5, show_default=True)
 @click.option('--snap_k', type=int,
               help='How many k images to save network snapshots',
-              default=200, show_default=True)
-def train_diffusion(
-    exp_id: str,
-    encoder_decoder_network: str,
-    dataset: str,
-    dim: int,
-    feat_spatial_size: int,
-    batch_size: int,
-    train_lr: float,
-    sample_k: int,
-    sample_num: int,
-    record_k: int,
-    snap_k: int
-):
+              default=2000, show_default=True)
+def train_diffusion(**kwargs):
+
+    opts = dnnlib.EasyDict(kwargs) # Command line arguments.
+
     # The device
     device = torch.device('cuda')
 
     # Prepare folder and tensorboard
-    run_dir = os.path.join('training_runs', exp_id)
+    run_dir = os.path.join('training_runs', opts.exp_id)
     os.makedirs(run_dir, exist_ok=True)
     import torch.utils.tensorboard as tensorboard
     stats_tfevents = tensorboard.SummaryWriter(run_dir)
     dnnlib.util.Logger(file_name=os.path.join(run_dir, 'log.txt'),
                        file_mode='a', should_flush=True)
     
+    # Dump config
+    with open(os.path.join(run_dir, 'config.json'), 'w') as f:
+        json.dump(opts, f, indent=4)
+    
     # The encoder decoder one
-    with dnnlib.util.open_url(encoder_decoder_network) as f:
+    with dnnlib.util.open_url(opts.encoder_decoder_network) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+        G = G.eval()
 
 
     # Set randomness
@@ -84,61 +85,95 @@ def train_diffusion(
     torch.backends.cuda.matmul.allow_tf32 = False       # Improves numerical accuracy.
     torch.backends.cudnn.allow_tf32 = False             # Improves numerical accuracy.
 
-    # Diffusion Unet Module and optimizer
-    d_unet = Unet(dim,
-                  channels=G.feat_coord_dim).to(device)
-    opt = Adam(d_unet.parameters(), lr=train_lr, betas = (0.9, 0.99))
+    # Diffusion Unet Module and optimizer --------------------
+    unet = Unet(dim=opts.dim,
+                channels=G.feat_coord_dim,
+                dim_mults=(1, 2, 4),
+                num_resnet_blocks=(2, 4, 8),
+                layer_attns=(False, False, True),
+                use_linear_attn=False,
+                cond_on_text=False
+                )
+    imagen = Imagen(
+            condition_on_text = False,
+            unets = (unet, ),
+            image_sizes = (opts.feat_spatial_size, ),
+            timesteps = 1000,
+            channels=G.feat_coord_dim,
+            auto_normalize_img=False,
+            min_snr_gamma=5,
+            min_snr_loss_weight=True,
+            dynamic_thresholding=False,
+            pred_objectives='x_start', # noise or x_start
+            )
+    trainer = ImagenTrainer(imagen=imagen,
+                            imagen_checkpoint_path=None, # TODO: continue training
+                            lr=opts.train_lr,
+                            cosine_decay_max_steps=None,  # Note I manually change the eta_min to 1e-5
+                            eps=1e-13,
+                            ).to(device)
 
-    # Diffusion
-    diffusion = GaussianDiffusion(
-        d_unet,
-        image_size = feat_spatial_size,
-        timesteps = 1000,   # number of steps
-        loss_type = 'l1',    # L1 or L2
-        auto_normalize = False,
-    ).to(device)
+    # ------------------------------
 
     # Dataset, sampler and iterator
-    dataset = Dataset(dataset,
+    dataset = Dataset(opts.dataset,
                       dim=G.feat_coord_dim,
-                      size=feat_spatial_size)
+                      size=opts.feat_spatial_size)
     sampler = misc.InfiniteSampler(dataset)
     training_iter = iter(torch.utils.data.DataLoader(dataset=dataset,
                                                      sampler=sampler,
-                                                     batch_size=batch_size))
+                                                     batch_size=opts.batch_size))
     
 
     # Counting initials
     count = 0
+    save_snapshot_list = []
+    start_time = time.time()
+    tick_end_time = None
+    scale_std = None
 
     # Main Loop Starts Here --------------------
     while True:
-        opt.zero_grad()
-        real_nc = next(training_iter).to(device)
-        loss = diffusion(real_nc)
-        loss.backward()
-        opt.step()
+        # Get data and forward
+        mu, log_var = next(training_iter)
+        mu = mu.to(device)
+        log_var = log_var.to(device)
+        real_nc = torch.randn_like(torch.exp(0.5 * log_var)) + mu
+        if scale_std is None: # Only compute for first batch
+            scale_std = 1. / real_nc.flatten().std()
+        real_nc = real_nc  * scale_std
+        loss = trainer(real_nc, unet_number=1)
+        trainer.update(unet_number = 1)
 
         # Increase couting
-        count += batch_size
+        count += opts.batch_size
         global_step = count // 1000
 
         # Recording
-        if count % (record_k * 1000) == 0:
-            stats_tfevents.add_scalar('loss', loss.item(),
+        if count % (opts.record_k * 1000) == 0:
+            stats_tfevents.add_scalar('loss', loss,
                                       global_step=global_step)
+            tick_end_time = time.time()
+            print(f'step {global_step}\t'
+                  f'loss {loss:.2f}\t'
+                  f'time {dnnlib.util.format_time(tick_end_time - start_time)}\t')
 
         # Sampling
-        if count % (sample_k * 1000) == 0:
-            sample_nc = diffusion.sample(sample_num)
-            sample_imgs = decode_nc(G, sample_nc).cpu().numpy()
+        if count % (opts.sample_k * 1000) == 0:
+            print('Save image ...')
+            sample_nc = trainer.sample(batch_size=opts.sample_num, use_tqdm=False)
+            sample_nc = sample_nc * 1. / scale_std
+            print('Value range of sampled nc: ', sample_nc.min(), sample_nc.max())
+            print('Stats of sampled nc:', sample_nc.mean(), sample_nc.var())
+            with torch.no_grad():
+                sample_imgs = decode_nc(G, sample_nc).cpu().numpy()
             # Save image to local target folder
             save_image_grid(sample_imgs,
                             os.path.join(run_dir,
                                          f'fakes{global_step:06d}.png'),
                             drange=[-1,1],
-                            grid_size=(int(np.sqrt(sample_num)),
-                                       int(np.sqrt(sample_num))))
+                            grid_size=(int(np.sqrt(opts.sample_num)),
+                                       int(np.sqrt(opts.sample_num))))
             # Save image to tensorboard
             stats_tfevents.add_image(f'fake', tvu.make_grid(
                 torch.tensor(sample_imgs[:16]),
@@ -148,10 +183,13 @@ def train_diffusion(
             ), global_step)
 
         # Save network snapshot
-        if count % (snap_k * 1000) == 0:
-            torch.save(d_unet.state_dict(),
-                       os.path.join(run_dir,
-                                    f'network-snapshot-{global_step}.pkl'))
+        if count % (opts.snap_k * 1000) == 0:
+            print(f'Save network-snapshot-{global_step}.pkl ...')
+            save_file = os.path.join(run_dir, f'network-snapshot-{global_step}.pkl')
+            save_snapshot_list.append(save_file)
+            trainer.save(save_file)
+            if len(save_snapshot_list) > 5:
+                delete_file(save_snapshot_list.pop(0))
 
 
 if __name__ == '__main__':

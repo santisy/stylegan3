@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from utils.utils import sample_coords
 
 __all__ = ['decode']
@@ -12,7 +13,7 @@ def decode_nc(G, nc):
 
     b = nc.size(0)
 
-    feat_coords = nc
+    feat_coords = F.sigmoid(nc)
 
     # Split the coordinates
     feat_coords_tuple = feat_coords.chunk(G.hash_encoder_num, dim=1)

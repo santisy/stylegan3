@@ -9,6 +9,7 @@
 """Loss functions."""
 
 import numpy as np
+from einops import reduce
 import torch
 import torch.nn.functional as F
 
@@ -16,6 +17,21 @@ from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import upfirdn2d
 from training.vgg_perceptual_loss import VGGPerceptualLoss
+
+
+def kl_loss(mu: torch.Tensor,
+            log_var: torch.Tensor,
+            kl_loss_weight: float=0.01,
+            kl_std: float=1.0,
+            ) -> torch.Tensor:
+    std = torch.exp(0.5 * log_var)
+    gt_dist = torch.distributions.normal.Normal( torch.zeros_like(mu), torch.ones_like(std)*kl_std )
+    sampled_dist = torch.distributions.normal.Normal( mu, std )
+    kl = torch.distributions.kl.kl_divergence(sampled_dist, gt_dist) # reversed KL
+    kl_loss = reduce(kl, 'b ... -> b (...)', 'mean').mean() * kl_loss_weight
+
+    return kl_loss
+
 
 #----------------------------------------------------------------------------
 
@@ -38,6 +54,8 @@ class StyleGAN2Loss(Loss):
                  blur_fade_kimg=0,
                  encoder_flag=False,
                  l2loss_weight=20.0,
+                 use_kl_reg=False,
+                 kl_loss_weight=1e-4,
                  ):
         super().__init__()
         self.device             = device
@@ -54,7 +72,9 @@ class StyleGAN2Loss(Loss):
         self.blur_init_sigma    = blur_init_sigma
         self.blur_fade_kimg     = blur_fade_kimg
         self.encoder_flag       = encoder_flag
-        self.l2loss_weight = l2loss_weight
+        self.l2loss_weight      = l2loss_weight
+        self.use_kl_reg         = use_kl_reg
+        self.kl_loss_weight     = kl_loss_weight
         if encoder_flag:
             self.vgg_perceptual_loss = VGGPerceptualLoss().to(device)
 
@@ -67,9 +87,10 @@ class StyleGAN2Loss(Loss):
                 ws[:, cutoff:] = self.G.mapping(torch.randn_like(z), c, update_emas=False)[:, cutoff:]
         if not self.encoder_flag:
             img = self.G.synthesis(ws1, ws2, z, update_emas=update_emas)
+            mu, log_var = None, None
         else:
-            img = self.G.synthesis(ws1, ws2, real_img, update_emas=update_emas)
-        return img, None
+            img, mu, log_var = self.G.synthesis(ws1, ws2, real_img, update_emas=update_emas, return_kl_terms=self.use_kl_reg)
+        return img, (mu, log_var)
 
     def run_D(self, img, c, blur_sigma=0, update_emas=False):
         blur_size = np.floor(blur_sigma * 3)
@@ -93,7 +114,7 @@ class StyleGAN2Loss(Loss):
         # Gmain: Maximize logits for generated images.
         if phase in ['Gmain', 'Gboth']:
             with torch.autograd.profiler.record_function('Gmain_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, real_img)
+                gen_img, kl_term = self.run_G(gen_z, gen_c, real_img)
                 gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
@@ -108,6 +129,13 @@ class StyleGAN2Loss(Loss):
                     loss_vgg = self.vgg_perceptual_loss(gen_img, real_img) * 5.0
                     loss_Gmain += loss_vgg
                     training_stats.report('Loss/G/vggloss', loss_vgg)
+                    # KL loss
+                    if self.use_kl_reg:
+                        loss_kl = kl_loss(kl_term[0], kl_term[1],
+                                          kl_loss_weight=self.kl_loss_weight,
+                                          kl_std=1.0)
+                        loss_Gmain += loss_kl
+                        training_stats.report('Loss/G/klloss', loss_kl)
 
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()

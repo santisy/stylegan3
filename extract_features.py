@@ -146,6 +146,7 @@ def generate_images(
     device = torch.device('cuda')
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+        G = G.eval()
 
     os.makedirs(outdir, exist_ok=True)
     print(f'\033[92mExtract to folder {outdir}\033[00m')
@@ -159,15 +160,17 @@ def generate_images(
     # Iter through:
     for i, img in enumerate(simple_data_iter):
         # Neural Coordinates Output
-        nc_out = G.img_encoder(img)
+        with torch.no_grad():
+            mu, log_var = G.img_encoder(img)
         # Check the shape
         if i == 0:
-            print('NC shape in this run is', nc_out.shape)
+            print('NC shape in this run is', mu.shape)
         # Dump the data to folder
-        nc_out = nc_out.cpu().numpy()
-        out_file = os.path.join(outdir, f'{i:07d}.npy')
+        mu = mu.cpu().numpy()
+        log_var = log_var.cpu().numpy()
+        out_file = os.path.join(outdir, f'{i:07d}.npz')
         with open(out_file, 'wb') as f:
-            np.save(f, nc_out)
+            np.savez(f, mu=mu, log_var=log_var)
         pbar.update(1)
     
     # Closing

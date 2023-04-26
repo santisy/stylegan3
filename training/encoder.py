@@ -358,6 +358,7 @@ class Encoder(nn.Module):
                  dropout=0.0,
                  resamp_with_conv=True,
                  double_z=True,
+                 use_kl_reg=False,
                  **ignore_kwargs):
         super().__init__()
         self.ch = ch
@@ -366,6 +367,7 @@ class Encoder(nn.Module):
         self.num_res_blocks = num_res_blocks
         self.resolution = resolution
         self.in_channels = in_channels
+        self.use_kl_reg = use_kl_reg
 
         # downsampling
         self.conv_in = torch.nn.Conv2d(in_channels,
@@ -413,7 +415,11 @@ class Encoder(nn.Module):
 
         # end
         self.norm_out = Normalize(block_in)
-        self.conv_out = nn.Conv2d(block_out, feat_coord_dim, 1, 1, 0)
+        if not use_kl_reg:
+            self.conv_out = nn.Conv2d(block_out, feat_coord_dim, 1, 1, 0)
+        else:
+            self.conv_out_mu = nn.Conv2d(block_out, feat_coord_dim, 1, 1, 0)
+            self.conv_out_var = nn.Conv2d(block_out, feat_coord_dim, 1, 1, 0)
 
 
     def forward(self, x):
@@ -443,9 +449,14 @@ class Encoder(nn.Module):
         # end
         h = self.norm_out(h)
         h = nonlinearity(h)
-        h = self.conv_out(h)
-        h = F.sigmoid(h)
-        return h
+        if not self.use_kl_reg:
+            h = self.conv_out(h)
+            h = F.sigmoid(h)
+            return h
+        else:
+            mu = self.conv_out_mu(h)
+            log_var = self.conv_out_var(h)
+            return mu, log_var
 
 
 class Decoder(nn.Module):

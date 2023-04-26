@@ -210,6 +210,10 @@ def parse_comma_separated_list(s):
 @click.option('--feat_coord_dim_per_table', help='Feat coord per table.',                       type=int, default=2, show_default=True)
 @click.option('--num_downsamples', help='Downsampling number of encoder.',                      type=int, default=5, show_default=True)
 @click.option('--additional_decoder_conv', help='Additional decoder convolution.',              type=bool, default=False, show_default=True)
+@click.option('--noise_perturb',    help='Noise perturbation of the neural coordinates.',       type=bool, default=False, show_default=True)
+@click.option('--noise_perturb_sigma', help='Noise perturbation sigma value.',                  type=float, default=2e-3, show_default=True)
+@click.option('--use_kl_reg',  help='Use KL regularization.',                                   type=bool, default=False, show_default=True)
+@click.option('--kl_loss_weight', help='KL loss weight.',                                       type=float, default=1e-4, show_default=True)
 
 
 def main(**kwargs):
@@ -275,7 +279,10 @@ def main(**kwargs):
                                  context_coordinates=opts.context_coordinates,
                                  feat_coord_dim_per_table=opts.feat_coord_dim_per_table,
                                  num_downsamples=opts.num_downsamples,
-                                 additional_decoder_conv=opts.additional_decoder_conv
+                                 additional_decoder_conv=opts.additional_decoder_conv,
+                                 noise_perturb=opts.noise_perturb,
+                                 noise_perturb_sigma=opts.noise_perturb_sigma,
+                                 use_kl_reg=opts.use_kl_reg,
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)
@@ -314,6 +321,8 @@ def main(**kwargs):
     c.encoder_flag = opts.encoder_flag
     c.loss_kwargs.encoder_flag = opts.encoder_flag
     c.loss_kwargs.l2loss_weight = opts.l2loss_weight
+    c.loss_kwargs.use_kl_reg = opts.use_kl_reg
+    c.loss_kwargs.kl_loss_weight = opts.kl_loss_weight
     if opts.encoder_flag:
         c.G_kwargs.class_name = 'training.hash_autoencoder_generator.HashAutoGenerator'
     c.D_kwargs.encoder_flag = opts.encoder_flag
@@ -331,27 +340,6 @@ def main(**kwargs):
 
     # Base configuration.
     c.ema_kimg = c.batch_size * 10 / 32
-
-    # These may help?
-    # Temp not done
-    # c.loss_kwargs.blur_init_sigma = 10 # Blur the images seen by the discriminator.
-    # c.loss_kwargs.blur_fade_kimg = c.batch_size * 200 / 32 # Fade out the blur during the first N kimg.
-
-    #if opts.cfg == 'stylegan2':
-    #    c.G_kwargs.class_name = 'training.networks_stylegan2.Generator'
-    #    c.loss_kwargs.style_mixing_prob = 0.9 # Enable style mixing regularization.
-    #    c.loss_kwargs.pl_weight = 2 # Enable path length regularization.
-    #    c.G_reg_interval = 4 # Enable lazy regularization for G.
-    #    c.G_kwargs.fused_modconv_default = 'inference_only' # Speed up training by using regular convolutions instead of grouped convolutions.
-    #    c.loss_kwargs.pl_no_weight_grad = True # Speed up path length regularization by skipping gradient computation wrt. conv2d weights.
-    #else:
-    #    c.G_kwargs.class_name = 'training.networks_stylegan3.Generator'
-    #    c.G_kwargs.magnitude_ema_beta = 0.5 ** (c.batch_size / (20 * 1e3))
-    #    if opts.cfg == 'stylegan3-r':
-    #        c.G_kwargs.conv_kernel = 1 # Use 1x1 convolutions.
-    #        c.G_kwargs.channel_base *= 2 # Double the number of feature maps.
-    #        c.G_kwargs.channel_max *= 2
-    #        c.G_kwargs.use_radial_filters = True # Use radially symmetric downsampling filters.
 
     # Augmentation.
     if opts.aug != 'noaug':
