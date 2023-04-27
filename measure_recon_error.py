@@ -6,7 +6,6 @@ import click
 import cv2
 import tqdm
 import torch
-import numpy as np
 
 import dnnlib
 import legacy
@@ -24,7 +23,7 @@ from utils.simple_dataset import SimpleDataset
 @click.option('--last_split_n',
               help='How many last files to be measured if provided',
               type=int, default=-1, show_default=True)
-@click.option('--runs', help='How many runs in total', type=int, default=10,
+@click.option('--runs', help='How many runs in total', type=int, default=1,
               show_default=True)
 def test_recon_main(
     network_pkl: str,
