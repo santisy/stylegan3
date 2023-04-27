@@ -122,10 +122,12 @@ class SimpleDataset:
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--outdir', help='Where to save the neural coordinates', type=str, required=True, metavar='DIR')
 @click.option('--dataset', help='Dataset zip file.', type=str, required=True)
+@click.option('--dataset2', help='Another dataset (Usually the validation dataset.).', type=str, default='', show_default=True)
 def generate_images(
     network_pkl: str,
     outdir: str,
     dataset: str,
+    dataset2: str,
 ):
     """Generate images using pretrained network pickle.
 
@@ -153,25 +155,36 @@ def generate_images(
 
     # Construct the dataset
     simple_data_iter = iter(SimpleDataset(dataset))
+    simple_data_iter2 = iter(SimpleDataset(dataset2)) if dataset2 != '' else None
 
-    # Pbar
-    pbar = tqdm.tqdm(total=len(simple_data_iter))
+    # Pbar and count
+    count = 0
+    pbar = tqdm.tqdm(total=len(simple_data_iter) if
+                     simple_data_iter2 is None else
+                     len(simple_data_iter2) + len(simple_data_iter))
 
-    # Iter through:
-    for i, img in enumerate(simple_data_iter):
-        # Neural Coordinates Output
-        with torch.no_grad():
-            mu, log_var = G.img_encoder(img)
-        # Check the shape
-        if i == 0:
-            print('NC shape in this run is', mu.shape)
-        # Dump the data to folder
-        mu = mu.cpu().numpy()
-        log_var = log_var.cpu().numpy()
-        out_file = os.path.join(outdir, f'{i:07d}.npz')
-        with open(out_file, 'wb') as f:
-            np.savez(f, mu=mu, log_var=log_var)
-        pbar.update(1)
+    def iter_through(data_iter):
+        # Iter through:
+        for i, img in enumerate(data_iter):
+            # Neural Coordinates Output
+            with torch.no_grad():
+                mu, log_var = G.img_encoder(img)
+            # Check the shape
+            if i == 0:
+                print('NC shape in this run is', mu.shape)
+            # Dump the data to folder
+            mu = mu.cpu().numpy()
+            log_var = log_var.cpu().numpy()
+            out_file = os.path.join(outdir, f'{count:07d}.npz')
+            with open(out_file, 'wb') as f:
+                np.savez(f, mu=mu, log_var=log_var)
+            pbar.update(1)
+            count += 1
+
+    # Iter through first dataset
+    iter_through(simple_data_iter)
+    if simple_data_iter2 is not None:
+        iter_through(simple_data_iter2)
     
     # Closing
     pbar.close()

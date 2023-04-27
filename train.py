@@ -214,6 +214,7 @@ def parse_comma_separated_list(s):
 @click.option('--noise_perturb_sigma', help='Noise perturbation sigma value.',                  type=float, default=2e-3, show_default=True)
 @click.option('--use_kl_reg',  help='Use KL regularization.',                                   type=bool, default=False, show_default=True)
 @click.option('--kl_loss_weight', help='KL loss weight.',                                       type=float, default=1e-4, show_default=True)
+@click.option('--split_val_n', help='The last n number images to be validation dataset.',       type=int, default=-1, show_default=True)
 
 
 def main(**kwargs):
@@ -297,6 +298,7 @@ def main(**kwargs):
     c.training_set_kwargs.use_labels = opts.cond
     c.training_set_kwargs.xflip = opts.mirror
     c.training_set_kwargs.img_size = opts.img_size
+    c.training_set_kwargs.split_val_n = opts.split_val_n
 
     # Hyperparameters & settings.
     c.num_gpus = opts.gpus

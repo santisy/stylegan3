@@ -170,6 +170,7 @@ class ImageFolderDataset(Dataset):
     def __init__(self,
         path,                   # Path to directory or zip.
         resolution      = None, # Ensure specific resolution, None = highest available.
+        split_val_n     = -1,   # Split the last n number image as the validation images
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._path = path
@@ -186,6 +187,8 @@ class ImageFolderDataset(Dataset):
 
         PIL.Image.init()
         self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in PIL.Image.EXTENSION)
+        if split_val_n > 0:
+            self._image_fnames = self._image_fnames[:-split_val_n]
         if len(self._image_fnames) == 0:
             raise IOError('No image files found in the specified path')
 
