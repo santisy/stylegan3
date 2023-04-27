@@ -10,17 +10,16 @@
 
 import os
 import re
-from typing import List, Optional, Tuple, Union
-import zipfile
+from typing import List, Tuple, Union
 
 import click
 import dnnlib
 import numpy as np
-import PIL.Image
 import torch
 import tqdm
 
 import legacy
+from utils.simple_dataset import SimpleDataset
 
 #----------------------------------------------------------------------------
 
@@ -69,54 +68,6 @@ def make_transform(translate: Tuple[float,float], angle: float):
     return m
 
 #----------------------------------------------------------------------------
-class SimpleDataset:
-    def __init__(self, dataset: str):
-        """
-            Simple dataset to extract the images from zip file and return a 
-            batch size 1 CUDA tensor.
-        """
-
-        assert os.path.isfile(dataset) and dataset.endswith('zip')
-        self._zipfile = zipfile.ZipFile(dataset)
-        self._all_fnames = set(self._zipfile.namelist())
-        PIL.Image.init()
-        self._image_fnames = sorted(fname for fname in self._all_fnames
-                                    if self._file_ext(fname)
-                                    in PIL.Image.EXTENSION)
-
-        self.data_len = len(self._image_fnames)
-
-    @staticmethod
-    def _file_ext(fname):
-        return os.path.splitext(fname)[1].lower()
-
-    def _open_file(self, fname):
-        return self._zipfile.open(fname, 'r')
-
-    def __len__(self):
-        return self.data_len
-
-    def __iter__(self):
-        self.n = 0
-        return self
-
-    def __next__(self):
-        if self.n < self.data_len:
-            fname = self._image_fnames[self.n]
-            self.n += 1
-            with self._open_file(fname) as f:
-                image = np.array(PIL.Image.open(f))
-            image = image.transpose(2, 0, 1)
-            img_tensor = torch.from_numpy(image.copy()).float()
-            img_tensor = img_tensor / 127.5 - 1.0
-            img_tensor = img_tensor.unsqueeze(dim=0).cuda()
-            return img_tensor
-        else:
-            raise StopIteration
-
-
-
-#----------------------------------------------------------------------------
 
 @click.command()
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
@@ -154,8 +105,8 @@ def generate_images(
     print(f'\033[92mExtract to folder {outdir}\033[00m')
 
     # Construct the dataset
-    simple_data_iter = iter(SimpleDataset(dataset))
-    simple_data_iter2 = iter(SimpleDataset(dataset2)) if dataset2 != '' else None
+    simple_data_iter = iter(SimpleDataset(dataset, device))
+    simple_data_iter2 = iter(SimpleDataset(dataset2, device)) if dataset2 != '' else None
 
     # Pbar and count
     count = 0

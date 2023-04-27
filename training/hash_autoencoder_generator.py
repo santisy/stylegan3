@@ -7,11 +7,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch_utils import persistence
-from hash_encoding.other_networks import MappingNetwork
 from gridencoder import GridEncoder
 from training.networks_stylegan2 import SynthesisNetworkFromHash
 from training.encoder import Encoder
-from training.encoder import Decoder
 from utils.utils import sample_coords
 from utils.dist_utils import dprint
 
