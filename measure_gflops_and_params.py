@@ -1,4 +1,10 @@
+"""Count the model GFlops and parameters
+"""
 import click
+
+import legacy
+import dnnlib
+
 
 def conv_flops(res, in_ch, out_ch, style_dim=512, up=False):
     """StyleGAN convolution GFlops counting"""
@@ -60,21 +66,42 @@ def torgb_flops(res, in_ch, style_dim=512):
 
     return flops
 
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters())
 
 @click.command()
-@click.option('--init_res', type=int, default=64)
-@click.option('--init_dim', type=int, default=512)
-@click.option('--out_res', type=int, default=256)
-@click.option('--style_dim', type=int, default=512)
-@click.option('--feat_coord_dim', type=int, default=32)
+@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--level_dim', type=int, default=4)
-def calc_flops(init_res: int=64,
-               init_dim: int=512,
-               out_res: int=256,
-               style_dim: int=512,
-               feat_coord_dim: int=32,
-               level_dim: int=4,
-               ):
+@click.option('--out_res', type=int, default=256)
+def calc_flops_and_params(network_pkl: str,
+                          level_dim: int=4,
+                          out_res: int=256
+                          ):
+
+    print('Loading networks from "%s"...' % network_pkl)
+    with dnnlib.util.open_url(network_pkl) as f:
+        G = legacy.load_network_pkl(f)['G_ema'] # type: ignore
+        G = G.eval()
+    
+    # Caculate Parameters
+    hash_parameter_count = 0
+    for hash_encoder in G.hash_encoder_list:
+        hash_parameter_count += count_parameters(hash_encoder)
+    decoder_parameter_count = count_parameters(G.synthesis_network)
+
+    print('\033[93mHash encoder total parameter counts:'
+          f' {hash_parameter_count/1e6:.4f}M\033[00m')
+    print('\033[93mDecoder total parameter counts:'
+          f' {decoder_parameter_count/1e6:.4f}M\033[00m')
+    print('\033[93mTotal parameter memory:'
+          f' {(decoder_parameter_count+hash_parameter_count)*4/1e9:.4f}Gb\033[00m')
+
+    # Extract parameters
+    init_res = G.init_res
+    init_dim = G.init_dim
+    style_dim = 512 # Default to 512, fixed
+    feat_coord_dim = G.feat_coord_dim
+
     flops = 0
     res_now = init_res
     dim_now = init_dim
@@ -99,5 +126,6 @@ def calc_flops(init_res: int=64,
     gflops = flops / 1e9
     print(f'\033[93mGFlops is {gflops:.2f}\033[00m')
 
+
 if __name__ == '__main__':
-    calc_flops()
+    calc_flops_and_params()

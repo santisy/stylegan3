@@ -9,11 +9,8 @@ from training.networks_stylegan2 import SynthesisLayer
 from training.networks_stylegan2 import FullyConnectedLayer
 from hash_retrieve_module import HashTableRetrieve
 from hash_retrieve_module import HashTableRecon
-from hash_encoding.svd_linear import SVDLinear
 from utils.utils import sinuous_pos_encode
 from utils.utils import sample_coords
-from utils.utils import get_hash_mask
-from utils.utils import get_shuffle_table_indices
 
 class ModulatedConv1d(nn.Module):
     def __init__(self, in_ch: int, out_ch: int, kernel_size: int, s_dim: int,
