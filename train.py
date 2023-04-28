@@ -215,6 +215,7 @@ def parse_comma_separated_list(s):
 @click.option('--use_kl_reg',  help='Use KL regularization.',                                   type=bool, default=False, show_default=True)
 @click.option('--kl_loss_weight', help='KL loss weight.',                                       type=float, default=1e-4, show_default=True)
 @click.option('--split_val_n', help='The last n number images to be validation dataset.',       type=int, default=-1, show_default=True)
+@click.option('--hash_res_ratio', help='The ratio of maximum hash resolution to init_res',      type=int, default=1, show_default=True)
 
 
 def main(**kwargs):
@@ -284,6 +285,7 @@ def main(**kwargs):
                                  noise_perturb=opts.noise_perturb,
                                  noise_perturb_sigma=opts.noise_perturb_sigma,
                                  use_kl_reg=opts.use_kl_reg,
+                                 hash_res_ratio=opts.hash_res_ratio,
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)

@@ -40,6 +40,7 @@ class HashAutoGenerator(nn.Module):
                  noise_perturb: bool=False,
                  noise_perturb_sigma: float=2e-3,
                  use_kl_reg: bool=False,
+                 hash_res_ratio: int=1,
                  **kwargs):
         """
             Args:
@@ -78,6 +79,8 @@ class HashAutoGenerator(nn.Module):
                 noise_perturb_sigma (bool): The sigma value to perturb the 
                     neural coordinates (default: 2e-3)
                 use_kl_reg (bool): Use KL regularization or not.
+                hash_res_ratio (bool): Hash maximum resolution ratio to the init res.
+                    (default: 1)
         """
 
         super().__init__()
@@ -108,7 +111,7 @@ class HashAutoGenerator(nn.Module):
                                             level_dim=level_dim,
                                             base_resolution=res_min,
                                             log2_hashmap_size=table_size_log2,
-                                            desired_resolution=init_res,
+                                            desired_resolution=init_res * hash_res_ratio,
                                             feat_coord_dim=feat_coord_dim_per_table,
                                             out_dim=init_dim // self.hash_encoder_num,
                                             dummy_hash_table=dummy_hash_table,

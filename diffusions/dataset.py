@@ -34,8 +34,8 @@ class Dataset(torch.utils.data.Dataset):
         npy_file = self._npy_files[idx]
         with open(npy_file, 'rb') as f:
             loaded = np.load(f)
-            mu = loaded['mu']
-            log_var = loaded['log_var']
+            mu = loaded['mu'][0]
+            log_var = loaded['log_var'][0]
 
         if mu.shape[0] != self._dim:
             raise RuntimeError('Dimension of neural coordinates wrong.'

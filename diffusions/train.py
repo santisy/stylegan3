@@ -104,12 +104,12 @@ def train_diffusion(**kwargs):
             min_snr_gamma=5,
             min_snr_loss_weight=True,
             dynamic_thresholding=False,
-            pred_objectives='x_start', # noise or x_start
+            pred_objectives='noise', # noise or x_start
             )
     trainer = ImagenTrainer(imagen=imagen,
                             imagen_checkpoint_path=None, # TODO: continue training
                             lr=opts.train_lr,
-                            cosine_decay_max_steps=None,  # Note I manually change the eta_min to 1e-5
+                            cosine_decay_max_steps=1e12,  # Note I manually change the eta_min to 1e-5
                             ).to(device)
 
     # ------------------------------
@@ -121,7 +121,8 @@ def train_diffusion(**kwargs):
     sampler = misc.InfiniteSampler(dataset)
     training_iter = iter(torch.utils.data.DataLoader(dataset=dataset,
                                                      sampler=sampler,
-                                                     batch_size=opts.batch_size))
+                                                     batch_size=opts.batch_size,
+                                                     prefetch_factor=2))
     
 
     # Counting initials

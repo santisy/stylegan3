@@ -14,7 +14,6 @@ def decode_nc(G, nc):
     b = nc.size(0)
 
     feat_coords = F.sigmoid(nc)
-    #feat_coords = nc
 
     # Split the coordinates
     feat_coords_tuple = feat_coords.chunk(G.hash_encoder_num, dim=1)
