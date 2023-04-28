@@ -110,7 +110,6 @@ def train_diffusion(**kwargs):
                             imagen_checkpoint_path=None, # TODO: continue training
                             lr=opts.train_lr,
                             cosine_decay_max_steps=None,  # Note I manually change the eta_min to 1e-5
-                            eps=1e-13,
                             ).to(device)
 
     # ------------------------------

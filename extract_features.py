@@ -114,7 +114,7 @@ def generate_images(
                      simple_data_iter2 is None else
                      len(simple_data_iter2) + len(simple_data_iter))
 
-    def iter_through(data_iter):
+    def iter_through(data_iter, count=0):
         # Iter through:
         for i, img in enumerate(data_iter):
             # Neural Coordinates Output
@@ -131,11 +131,12 @@ def generate_images(
                 np.savez(f, mu=mu, log_var=log_var)
             pbar.update(1)
             count += 1
+        return count
 
     # Iter through first dataset
-    iter_through(simple_data_iter)
+    count = iter_through(simple_data_iter, count)
     if simple_data_iter2 is not None:
-        iter_through(simple_data_iter2)
+        iter_through(simple_data_iter2, count)
     
     # Closing
     pbar.close()

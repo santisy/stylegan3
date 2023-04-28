@@ -4,8 +4,11 @@ import os
 
 import click
 import cv2
+import numpy as np
 import tqdm
 import torch
+from torchmetrics import PeakSignalNoiseRatio
+from torchmetrics import StructuralSimilarityIndexMeasure
 
 import dnnlib
 import legacy
@@ -52,12 +55,16 @@ def test_recon_main(
     
     # Construct LPIPS forward instance
     loss_fn = lpips.LPIPS(net='alex').to(device)
+    psnr_fn = PeakSignalNoiseRatio().to(device)
+    ssim_fn = StructuralSimilarityIndexMeasure().to(device)
 
     # Loss collection
-    loss_collect = torch.zeros(len(data_iter)).to(device)
+    lpips_collect = torch.zeros(runs, len(data_iter)).to(device)
+    psnr_collect = torch.zeros(runs, len(data_iter)).to(device)
+    ssim_collect = torch.zeros(runs, len(data_iter)).to(device)
 
     # Iterate
-    pbar = tqdm(total=len(data_iter) * runs)
+    pbar = tqdm.tqdm(total=len(data_iter) * runs)
 
     for j in range(runs):
         for i, img in enumerate(data_iter):
@@ -66,20 +73,34 @@ def test_recon_main(
                 rec = G(img)
 
             # Collect metric
-            loss_collect[len(data_iter)*j + i] = loss_fn(img, rec).detach()
+            lpips_collect[j, i] = loss_fn(img, rec).detach()
+            psnr_collect[j, i] = psnr_fn(rec, img).detach()
+            ssim_collect[j, i] = ssim_fn(rec, img).detach()
 
             # Save images (only save images at the first run)
             if j == 0:
-                rec_img = rec[0].permute(1, 2, 0).cpu().numpy()
-                rec_img = (rec_img + 1.0) / 2.0 * 255.0
+                rec_img = rec[0].permute(1, 2, 0).cpu()
+                rec_img = torch.clip(rec_img, -1, 1)
+                rec_img = (rec_img.numpy() + 1.0) / 2.0 * 255.0
                 rec_img = cv2.cvtColor(rec_img.astype(np.uint8), cv2.COLOR_RGB2BGR)
                 cv2.imwrite(os.path.join(outdir, f'rec_{i:06d}.png'), rec_img)
             
             # Update pbar
             pbar.update(1)
 
-    f.write(f'mean {loss_collect.mean().item(): .4f} \t'
-            f' 2*std {loss_collect.std().item() * 2: .6f}')
+    # Record LPIPS
+    lpips_collect = lpips_collect.mean(dim=0)
+    f.write(f'LPIPS: \nmean {lpips_collect.mean().item(): .4f} \t'
+            f' 2*std {lpips_collect.std().item() * 2: .6f}\n')
+    # Record PSNR
+    psnr_collect = psnr_collect.mean(dim=0)
+    f.write(f'PSNR: \nmean {psnr_collect.mean().item(): .4f} \t'
+            f' 2*std {psnr_collect.std().item() * 2: .6f}\n')
+    # Record SSIM
+    ssim_collect = ssim_collect.mean(dim=0)
+    f.write(f'SSIM: \nmean {ssim_collect.mean().item(): .4f} \t'
+            f' 2*std {ssim_collect.std().item() * 2: .6f}\n')
+
     f.close()
     pbar.close()
 
