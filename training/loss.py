@@ -89,7 +89,12 @@ class StyleGAN2Loss(Loss):
             img = self.G.synthesis(ws1, ws2, z, update_emas=update_emas)
             mu, log_var = None, None
         else:
-            img, mu, log_var = self.G.synthesis(ws1, ws2, real_img, update_emas=update_emas, return_kl_terms=self.use_kl_reg)
+            out = self.G.synthesis(ws1, ws2, real_img, update_emas=update_emas, return_kl_terms=self.use_kl_reg)
+            if not self.use_kl_reg:
+                img = out
+                mu, log_var = None, None
+            else:
+                img, mu, log_var = out
         return img, (mu, log_var)
 
     def run_D(self, img, c, blur_sigma=0, update_emas=False):
