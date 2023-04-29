@@ -41,6 +41,7 @@ class HashAutoGenerator(nn.Module):
                  noise_perturb_sigma: float=2e-3,
                  use_kl_reg: bool=False,
                  hash_res_ratio: int=1,
+                 expand_dim: int=-1,
                  **kwargs):
         """
             Args:
@@ -81,12 +82,13 @@ class HashAutoGenerator(nn.Module):
                 use_kl_reg (bool): Use KL regularization or not.
                 hash_res_ratio (bool): Hash maximum resolution ratio to the init res.
                     (default: 1)
+                expand_dim (int): expand dimsion of neural indexing channel-wise.
+                    (default: -1)
         """
 
         super().__init__()
         self.z_dim = z_dim
         self.c_dim = c_dim
-        self.hash_encoder_num = feat_coord_dim // feat_coord_dim_per_table
         self.init_dim = init_dim
         self.init_res = init_res
         self.discrete_all = discrete_all
@@ -94,6 +96,11 @@ class HashAutoGenerator(nn.Module):
         self.noise_perturb = noise_perturb
         self.noise_perturb_sigma = noise_perturb_sigma
         self.use_kl_reg = use_kl_reg
+        self.expand_dim = expand_dim
+        if expand_dim > 0:
+            self.hash_encoder_num = expand_dim // feat_coord_dim_per_table
+        else:
+            self.hash_encoder_num = feat_coord_dim // feat_coord_dim_per_table
 
         self.img_encoder = Encoder(feat_coord_dim=feat_coord_dim,
                                    ch=32,
@@ -123,6 +130,8 @@ class HashAutoGenerator(nn.Module):
                                             no_modulated_linear=False,
                                             one_hash_group=True,
                                             ))
+        dprint('Number of groups of hash tables is'
+               f' {len(self.hash_encoder_list)}', color='g')
 
         self.synthesis_network = SynthesisNetworkFromHash(style_dim,
                                                           res_max,
@@ -173,6 +182,8 @@ class HashAutoGenerator(nn.Module):
                     0, 1)
 
         # Split the coordinates
+        if self.expand_dim > 0:
+            feat_coords = feat_coords.repeat_interleave(self.expand_dim // self.feat_coord_dim, dim=1)
         feat_coords_tuple = feat_coords.chunk(self.hash_encoder_num, dim=1)
         coords = sample_coords(b, self.init_res).to(img.device) # [0, 1], shape (B x N) x (2 or 3)
         coords = coords.reshape(-1, 2)
