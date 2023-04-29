@@ -1,0 +1,92 @@
+# Copyright (c) 2021, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+#
+# NVIDIA CORPORATION and its licensors retain all intellectual property
+# and proprietary rights in and to this software, related documentation
+# and any modifications thereto.  Any use, reproduction, disclosure or
+# distribution of this software and related documentation without an express
+# license agreement from NVIDIA CORPORATION is strictly prohibited.
+
+"""Generate images using pretrained network pickle."""
+
+import os
+
+import click
+import dnnlib
+import numpy as np
+import torch
+import tqdm
+
+import legacy
+from utils.simple_dataset import SimpleDataset
+
+
+@click.command()
+@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
+@click.option('--outdir', help='Where to save the neural coordinates', type=str, required=True, metavar='DIR')
+@click.option('--dataset', help='Dataset zip file.', type=str, required=True)
+def generate_images(
+    network_pkl: str,
+    outdir: str,
+    dataset: str,
+):
+    """Generate images using pretrained network pickle.
+
+    Examples:
+
+    \b
+    # Generate an image using pre-trained AFHQv2 model ("Ours" in Figure 1, left).
+    python gen_images.py --outdir=out --truni=1 --seeds=2 \\
+        --network=https://api.ngc.nvidia.com/v2/models/nvidia/research/stylegan3/versions/1/files/stylegan3-r-afhqv2-512x512.pkl
+
+    \b
+    # Generate uniurated images with truniation using the MetFaces-U dataset
+    python gen_images.py --outdir=out --truni=0.7 --seeds=600-605 \\
+        --network=https://api.ngc.nvidia.com/v2/models/nvidia/research/stylegan3/versions/1/files/stylegan3-t-metfacesu-1024x1024.pkl
+    """
+
+    print('Loading networks from "%s"...' % network_pkl)
+    device = torch.device('cuda')
+    with dnnlib.util.open_url(network_pkl) as f:
+        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+        G = G.eval()
+
+    # Extract parameters and pre-computation
+    res_max = G.hash_encoder_list[0].desired_resolution
+    res_min = G.hash_encoder_list[0].base_resolution
+    coord_slot_stats = np.zeros((G.hash_encoder_num, G.feat_coord_dim))
+
+    os.makedirs(outdir, exist_ok=True)
+    print(f'\033[92mExtract to folder {outdir}\033[00m')
+
+    # Construct the dataset
+    simple_data_iter = iter(SimpleDataset(dataset, device))
+
+    # Pbar and count
+    pbar = tqdm.tqdm(total=len(simple_data_iter))
+
+    def iter_through(data_iter):
+        # Iter through:
+        for i, img in enumerate(data_iter):
+            # Neural Coordinates Output
+            with torch.no_grad():
+                ni = G.img_encoder(img)[0]
+            if i == 0:
+                print('ni shape in this run is', ni.shape)
+            coord = torch.floor(ni * res_max).copy().cpu().numpy().astype(np.int32)
+            for j, c in enumerate(coord):
+                coord_slot_stats[j, c.flatten()] += 1
+            # Check the shape
+            pbar.update(1)
+
+    # Iter through first dataset
+    iter_through(simple_data_iter)
+    
+    # Closing
+    pbar.close()
+
+#----------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    generate_images() # pylint: disable=no-value-for-parameter
+
+#----------------------------------------------------------------------------
