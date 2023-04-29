@@ -9,8 +9,6 @@
 """Generate images using pretrained network pickle."""
 
 import os
-import re
-from typing import List, Tuple, Union
 
 import click
 import dnnlib
@@ -21,53 +19,6 @@ import tqdm
 import legacy
 from utils.simple_dataset import SimpleDataset
 
-#----------------------------------------------------------------------------
-
-def parse_range(s: Union[str, List]) -> List[int]:
-    '''Parse a comma separated list of numbers or ranges and return a list of ints.
-
-    Example: '1,2,5-10' returns [1, 2, 5, 6, 7]
-    '''
-    if isinstance(s, list): return s
-    ranges = []
-    range_re = re.compile(r'^(\d+)-(\d+)$')
-    for p in s.split(','):
-        m = range_re.match(p)
-        if m:
-            ranges.extend(range(int(m.group(1)), int(m.group(2))+1))
-        else:
-            ranges.append(int(p))
-    return ranges
-
-#----------------------------------------------------------------------------
-
-def parse_vec2(s: Union[str, Tuple[float, float]]) -> Tuple[float, float]:
-    '''Parse a floating point 2-vector of syntax 'a,b'.
-
-    Example:
-        '0,1' returns (0,1)
-    '''
-    if isinstance(s, tuple): return s
-    parts = s.split(',')
-    if len(parts) == 2:
-        return (float(parts[0]), float(parts[1]))
-    raise ValueError(f'cannot parse 2-vector {s}')
-
-#----------------------------------------------------------------------------
-
-def make_transform(translate: Tuple[float,float], angle: float):
-    m = np.eye(3)
-    s = np.sin(angle/360.0*np.pi*2)
-    c = np.cos(angle/360.0*np.pi*2)
-    m[0][0] = c
-    m[0][1] = s
-    m[0][2] = translate[0]
-    m[1][0] = -s
-    m[1][1] = c
-    m[1][2] = translate[1]
-    return m
-
-#----------------------------------------------------------------------------
 
 @click.command()
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
@@ -86,12 +37,12 @@ def generate_images(
 
     \b
     # Generate an image using pre-trained AFHQv2 model ("Ours" in Figure 1, left).
-    python gen_images.py --outdir=out --trunc=1 --seeds=2 \\
+    python gen_images.py --outdir=out --truni=1 --seeds=2 \\
         --network=https://api.ngc.nvidia.com/v2/models/nvidia/research/stylegan3/versions/1/files/stylegan3-r-afhqv2-512x512.pkl
 
     \b
-    # Generate uncurated images with truncation using the MetFaces-U dataset
-    python gen_images.py --outdir=out --trunc=0.7 --seeds=600-605 \\
+    # Generate uniurated images with truniation using the MetFaces-U dataset
+    python gen_images.py --outdir=out --truni=0.7 --seeds=600-605 \\
         --network=https://api.ngc.nvidia.com/v2/models/nvidia/research/stylegan3/versions/1/files/stylegan3-t-metfacesu-1024x1024.pkl
     """
 
@@ -119,16 +70,15 @@ def generate_images(
         for i, img in enumerate(data_iter):
             # Neural Coordinates Output
             with torch.no_grad():
-                mu, log_var = G.img_encoder(img)
+                ni = G.img_encoder(img)
             # Check the shape
             if i == 0:
-                print('NC shape in this run is', mu.shape)
+                print('ni shape in this run is', ni.shape)
             # Dump the data to folder
-            mu = mu.cpu().numpy()
-            log_var = log_var.cpu().numpy()
+            ni = ni.cpu().numpy()
             out_file = os.path.join(outdir, f'{count:07d}.npz')
             with open(out_file, 'wb') as f:
-                np.savez(f, mu=mu, log_var=log_var)
+                np.savez(f, ni=ni)
             pbar.update(1)
             count += 1
         return count

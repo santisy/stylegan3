@@ -100,7 +100,7 @@ def train_diffusion(**kwargs):
             image_sizes = (opts.feat_spatial_size, ),
             timesteps = 1000,
             channels=G.feat_coord_dim,
-            auto_normalize_img=False,
+            auto_normalize_img=True,
             min_snr_gamma=5,
             min_snr_loss_weight=True,
             dynamic_thresholding=False,
@@ -135,14 +135,8 @@ def train_diffusion(**kwargs):
     # Main Loop Starts Here --------------------
     while True:
         # Get data and forward
-        mu, log_var = next(training_iter)
-        mu = mu.to(device)
-        log_var = log_var.to(device)
-        real_nc = torch.randn_like(torch.exp(0.5 * log_var)) + mu
-        if scale_std is None: # Only compute for first batch
-            scale_std = 1. / real_nc.flatten().std()
-        real_nc = real_nc  * scale_std
-        loss = trainer(real_nc, unet_number=1)
+        real_ni = next(training_iter)
+        loss = trainer(real_ni, unet_number=1)
         trainer.update(unet_number = 1)
 
         # Increase couting
@@ -161,12 +155,12 @@ def train_diffusion(**kwargs):
         # Sampling
         if count % (opts.sample_k * 1000) == 0:
             print('Save image ...')
-            sample_nc = trainer.sample(batch_size=opts.sample_num, use_tqdm=False)
-            sample_nc = sample_nc * 1. / scale_std
-            print('Value range of sampled nc: ', sample_nc.min(), sample_nc.max())
-            print('Stats of sampled nc:', sample_nc.mean(), sample_nc.var())
+            sample_ni = trainer.sample(batch_size=opts.sample_num, use_tqdm=False)
+            print('Value range of sampled nc: ', sample_ni.min(), sample_ni.max())
+            print('Stats of sampled nc:', sample_ni.mean(), sample_ni.var())
+            sample_ni = torch.clip(sample_ni, 0, 1)
             with torch.no_grad():
-                sample_imgs = decode_nc(G, sample_nc).cpu().numpy()
+                sample_imgs = decode_nc(G, sample_ni).cpu().numpy()
             # Save image to local target folder
             save_image_grid(sample_imgs,
                             os.path.join(run_dir,
