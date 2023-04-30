@@ -173,7 +173,8 @@ class HashAutoGenerator(nn.Module):
             feat_coords = self.img_encoder(img) # B x F_C_C x W x H
         else:
             mu, log_var = self.img_encoder(img)
-            feat_coords = F.sigmoid(torch.randn_like(torch.exp(0.5 * log_var)) + mu)
+            std = torch.exp(0.5 * log_var)
+            feat_coords = F.sigmoid(torch.randn_like(std) * std + mu)
 
         if self.noise_perturb:
             feat_coords = torch.clip(
