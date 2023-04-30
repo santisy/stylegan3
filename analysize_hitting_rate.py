@@ -11,11 +11,13 @@
 import os
 
 import click
-import dnnlib
+import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 import torch
 import tqdm
 
+import dnnlib
 import legacy
 from utils.simple_dataset import SimpleDataset
 
@@ -51,12 +53,11 @@ def generate_images(
         G = G.eval()
 
     # Extract parameters and pre-computation
-    res_max = G.hash_encoder_list[0].desired_resolution
-    res_min = G.hash_encoder_list[0].base_resolution
-    coord_slot_stats = np.zeros((G.hash_encoder_num, G.feat_coord_dim))
+    res_max = 64
+    coord_slot_stats = np.zeros((G.feat_coord_dim, res_max + 1)).astype(np.float32)
 
     os.makedirs(outdir, exist_ok=True)
-    print(f'\033[92mExtract to folder {outdir}\033[00m')
+    print(f'\033[92mSave to folder {outdir}\033[00m')
 
     # Construct the dataset
     simple_data_iter = iter(SimpleDataset(dataset, device))
@@ -72,17 +73,38 @@ def generate_images(
                 ni = G.img_encoder(img)[0]
             if i == 0:
                 print('ni shape in this run is', ni.shape)
-            coord = torch.floor(ni * res_max).copy().cpu().numpy().astype(np.int32)
-            for j, c in enumerate(coord):
-                coord_slot_stats[j, c.flatten()] += 1
+            ni = torch.clip(ni, 0, 1)
+            coord = torch.floor(ni * res_max).long().cpu().numpy()
+            coord = np.clip(coord, 0, 63)
+            coord2 = coord + 1
+            for j, (c1, c2) in enumerate(zip(coord, coord2)):
+                coord_slot_stats[j, c1.flatten()] += 1
+                coord_slot_stats[j, c2.flatten()] += 1
+
             # Check the shape
             pbar.update(1)
 
     # Iter through first dataset
     iter_through(simple_data_iter)
-    
+
     # Closing
     pbar.close()
+
+    # Plotting
+    coord_slot_stats = coord_slot_stats.mean(axis=0)
+    coord_slot_stats = coord_slot_stats / np.sum(coord_slot_stats)
+    with open(os.path.join(outdir, 'coord_split_stats.npy'), 'wb') as f:
+        np.save(f, coord_slot_stats)
+    sns.set_style("whitegrid")
+    sns.barplot(x=np.arange(len(coord_slot_stats)),
+                y=coord_slot_stats,
+                palette="rocket")    
+    plt.title("Indices Hitting Ratio")
+    plt.xlabel("Indices")
+    plt.ylabel("Ratio (%)")
+
+    # Show the plot
+    plt.show()
 
 #----------------------------------------------------------------------------
 
