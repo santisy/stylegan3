@@ -48,9 +48,11 @@ def generate_images(
 
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
+    use_kl_reg = None
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
         G = G.eval()
+        use_kl_reg = G.use_kl_reg
 
     os.makedirs(outdir, exist_ok=True)
     print(f'\033[92mExtract to folder {outdir}\033[00m')
@@ -70,15 +72,25 @@ def generate_images(
         for i, img in enumerate(data_iter):
             # Neural Coordinates Output
             with torch.no_grad():
-                ni = G.img_encoder(img)
-            # Check the shape
-            if i == 0:
-                print('ni shape in this run is', ni.shape)
+                if not use_kl_reg:
+                    ni = G.img_encoder(img)
+                    if i == 0:
+                        print('Shape in this run is', ni.shape)
+                    ni = ni.cpu().numpy()
+                else:
+                    mu, log_var = G.img_encoder(img)
+                    if i == 0:
+                        print('Shape in this run is', mu.shape)
+                    mu = mu.cpu().numpy()
+                    log_var = log_var.cpu().numpy()
             # Dump the data to folder
-            ni = ni.cpu().numpy()
             out_file = os.path.join(outdir, f'{count:07d}.npz')
-            with open(out_file, 'wb') as f:
-                np.savez(f, ni=ni)
+            if not use_kl_reg:
+                with open(out_file, 'wb') as f:
+                    np.savez(f, ni=ni)
+            else:
+                with open(out_file, 'wb') as f:
+                    np.savez(f, mu=mu, log_var=log_var)
             pbar.update(1)
             count += 1
         return count

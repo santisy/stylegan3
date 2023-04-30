@@ -16,6 +16,10 @@ def decode_nc(G, nc):
     feat_coords = nc
 
     # Split the coordinates
+    if G.expand_dim > 0:
+        feat_coords = feat_coords.repeat_interleave(
+            G.expand_dim // G.feat_coord_dim, dim=1)
+    # Split the coordinates
     feat_coords_tuple = feat_coords.chunk(G.hash_encoder_num, dim=1)
     coords = sample_coords(b, G.init_res).to(nc.device) # [0, 1], shape (B x N) x (2 or 3)
     coords = coords.reshape(-1, 2)

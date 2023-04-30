@@ -11,6 +11,7 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 sys.path.insert(0, '.')
 
 from imagen_pytorch import Unet, Imagen, ImagenTrainer
@@ -53,6 +54,10 @@ from diffusions.decode import decode_nc
 @click.option('--snap_k', type=int,
               help='How many k images to save network snapshots',
               default=2000, show_default=True)
+@click.option('--dim_mults', type=lambda x:x.split(','),
+              help='The channel multiplication of the network.',
+              default=(1,2,2,4), show_default=True)
+
 def train_diffusion(**kwargs):
 
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
@@ -72,10 +77,12 @@ def train_diffusion(**kwargs):
     with open(os.path.join(run_dir, 'config.json'), 'w') as f:
         json.dump(opts, f, indent=4)
     
+    use_kl_reg = None
     # The encoder decoder one
     with dnnlib.util.open_url(opts.encoder_decoder_network) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
         G = G.eval()
+        use_kl_reg = G.use_kl_reg
 
 
     # Set randomness
@@ -88,10 +95,11 @@ def train_diffusion(**kwargs):
     # Diffusion Unet Module and optimizer --------------------
     unet = Unet(dim=opts.dim,
                 channels=G.feat_coord_dim,
-                dim_mults=(1, 2, 4),
-                num_resnet_blocks=(2, 4, 8),
-                layer_attns=(False, False, True),
-                use_linear_attn=False,
+                dim_mults=opts.dim_mults,
+                num_resnet_blocks=3,
+                layer_attns=(False, False, True, True),
+                layer_cross_attns = False,
+                use_linear_attn = True,
                 cond_on_text=False
                 )
     imagen = Imagen(
@@ -105,11 +113,12 @@ def train_diffusion(**kwargs):
             min_snr_loss_weight=True,
             dynamic_thresholding=False,
             pred_objectives='noise', # noise or x_start
+            loss_type='l2'
             )
     trainer = ImagenTrainer(imagen=imagen,
                             imagen_checkpoint_path=None, # TODO: continue training
                             lr=opts.train_lr,
-                            cosine_decay_max_steps=1e12,  # Note I manually change the eta_min to 1e-5
+                            cosine_decay_max_steps=None,  # Note I manually change the eta_min to 1e-5
                             ).to(device)
 
     # ------------------------------
@@ -117,7 +126,8 @@ def train_diffusion(**kwargs):
     # Dataset, sampler and iterator
     dataset = Dataset(opts.dataset,
                       dim=G.feat_coord_dim,
-                      size=opts.feat_spatial_size)
+                      size=opts.feat_spatial_size,
+                      use_kl_reg=use_kl_reg)
     sampler = misc.InfiniteSampler(dataset)
     training_iter = iter(torch.utils.data.DataLoader(dataset=dataset,
                                                      sampler=sampler,
@@ -130,14 +140,15 @@ def train_diffusion(**kwargs):
     save_snapshot_list = []
     start_time = time.time()
     tick_end_time = None
-    scale_std = None
 
     # Main Loop Starts Here --------------------
     while True:
         # Get data and forward
         real_ni = next(training_iter)
+        if use_kl_reg:
+            real_ni = F.sigmoid(real_ni)
         loss = trainer(real_ni, unet_number=1)
-        trainer.update(unet_number = 1)
+        trainer.update(unet_number=1)
 
         # Increase couting
         count += opts.batch_size
@@ -145,11 +156,16 @@ def train_diffusion(**kwargs):
 
         # Recording
         if count % (opts.record_k * 1000) == 0:
-            stats_tfevents.add_scalar('loss', loss,
+            cur_lr = trainer.get_lr(unet_number=1)
+            stats_tfevents.add_scalar('Loss/diff_loss', loss,
+                                      global_step=global_step)
+            stats_tfevents.add_scalar('Progress/lr', cur_lr,
                                       global_step=global_step)
             tick_end_time = time.time()
-            print(f'step {global_step}\t'
-                  f'loss {loss:.2f}\t'
+            print(f'Iters {count // opts.batch_size / 1000.: 2.f}k\t'
+                  f'kimg {count // 1000}\t'
+                  f'loss {loss:.4f}\t'
+                  f'learning_rate {cur_lr: .6f}\t'
                   f'time {dnnlib.util.format_time(tick_end_time - start_time)}\t')
 
         # Sampling
