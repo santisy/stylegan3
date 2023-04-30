@@ -15,7 +15,6 @@ import torch.nn.functional as F
 sys.path.insert(0, '.')
 
 from imagen_pytorch import Unet, Imagen, ImagenTrainer
-from ldm.models.diffusion.ddpm import DDPM
 
 import dnnlib
 import legacy
@@ -54,9 +53,12 @@ from diffusions.decode import decode_nc
 @click.option('--snap_k', type=int,
               help='How many k images to save network snapshots',
               default=2000, show_default=True)
-@click.option('--dim_mults', type=lambda x:x.split(','),
+@click.option('--dim_mults', type=lambda x:[int(y) for y in x.split(',')],
               help='The channel multiplication of the network.',
-              default=(1,2,2,4), show_default=True)
+              default='1,2,2,4', show_default=True)
+@click.option('--num_resnet_blocks', type=int,
+              help='Number of residual blocks.',
+              default=3, show_default=True)
 
 def train_diffusion(**kwargs):
 
@@ -96,7 +98,7 @@ def train_diffusion(**kwargs):
     unet = Unet(dim=opts.dim,
                 channels=G.feat_coord_dim,
                 dim_mults=opts.dim_mults,
-                num_resnet_blocks=3,
+                num_resnet_blocks=opts.num_resnet_blocks,
                 layer_attns=(False, False, True, True),
                 layer_cross_attns = False,
                 use_linear_attn = True,
@@ -162,7 +164,7 @@ def train_diffusion(**kwargs):
             stats_tfevents.add_scalar('Progress/lr', cur_lr,
                                       global_step=global_step)
             tick_end_time = time.time()
-            print(f'Iters {count // opts.batch_size / 1000.: 2.f}k\t'
+            print(f'Iters {count // opts.batch_size / 1000.: .2f}k\t'
                   f'kimg {count // 1000}\t'
                   f'loss {loss:.4f}\t'
                   f'learning_rate {cur_lr: .6f}\t'
