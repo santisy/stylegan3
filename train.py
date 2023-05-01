@@ -211,7 +211,7 @@ def parse_comma_separated_list(s):
 @click.option('--num_downsamples', help='Downsampling number of encoder.',                      type=int, default=5, show_default=True)
 @click.option('--additional_decoder_conv', help='Additional decoder convolution.',              type=bool, default=False, show_default=True)
 @click.option('--noise_perturb',    help='Noise perturbation of the neural coordinates.',       type=bool, default=False, show_default=True)
-@click.option('--noise_perturb_sigma', help='Noise perturbation sigma value.',                  type=float, default=2e-3, show_default=True)
+@click.option('--noise_perturb_sigma', help='Noise perturbation sigma value.',                  type=float, default=-1.0, show_default=True)
 @click.option('--use_kl_reg',  help='Use KL regularization.',                                   type=bool, default=False, show_default=True)
 @click.option('--kl_loss_weight', help='KL loss weight.',                                       type=float, default=1e-4, show_default=True)
 @click.option('--split_val_n', help='The last n number images to be validation dataset.',       type=int, default=-1, show_default=True)
