@@ -102,7 +102,10 @@ def train_diffusion(**kwargs):
     dataset = Dataset(opts.dataset,
                       dim=G.feat_coord_dim,
                       size=opts.feat_spatial_size,
-                      use_kl_reg=use_kl_reg)
+                      use_kl_reg=use_kl_reg,
+                      noise_perturb=G.noise_purturb,
+                      noise_perturb_sigma=G.noise_perturb_sigma,
+                      )
     sampler = misc.InfiniteSampler(dataset)
     training_iter = iter(torch.utils.data.DataLoader(dataset=dataset,
                                                      sampler=sampler,

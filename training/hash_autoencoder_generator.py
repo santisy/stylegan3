@@ -38,7 +38,7 @@ class HashAutoGenerator(nn.Module):
                  feat_coord_dim_per_table: int=2,
                  additional_decoder_conv: bool=False,
                  noise_perturb: bool=False,
-                 noise_perturb_sigma: float=2e-3,
+                 noise_perturb_sigma: float=-1.0,
                  use_kl_reg: bool=False,
                  hash_res_ratio: int=1,
                  expand_dim: int=-1,
@@ -78,7 +78,9 @@ class HashAutoGenerator(nn.Module):
                 noise_perturb (bool): Noise perturbation on neural coordinates or
                     not (default: False)
                 noise_perturb_sigma (bool): The sigma value to perturb the 
-                    neural coordinates (default: 2e-3)
+                    neural coordinates. If -1.0, then we would calculate the 
+                    sigma according to the .
+                    (default: -1)
                 use_kl_reg (bool): Use KL regularization or not.
                 hash_res_ratio (bool): Hash maximum resolution ratio to the init res.
                     (default: 1)
@@ -94,9 +96,16 @@ class HashAutoGenerator(nn.Module):
         self.discrete_all = discrete_all
         self.feat_coord_dim = feat_coord_dim
         self.noise_perturb = noise_perturb
-        self.noise_perturb_sigma = noise_perturb_sigma
         self.use_kl_reg = use_kl_reg
         self.expand_dim = expand_dim
+
+        if noise_perturb_sigma > 0:
+            self.noise_perturb_sigma = noise_perturb_sigma
+        else:
+            # Automatically calculate the noise pterturb sigma according to 
+            #   the 2*std=half of the resolution
+            self.noise_perturb_sigma = 1. / (init_res * hash_res_ratio * 2 * 2)
+
         if expand_dim > 0:
             self.hash_encoder_num = expand_dim // feat_coord_dim_per_table
         else:
@@ -178,8 +187,8 @@ class HashAutoGenerator(nn.Module):
 
         if self.noise_perturb:
             feat_coords = torch.clip(
-                    feat_coords * np.sqrt(1 - self.noise_perturb_sigma) +
-                    torch.randn_like(feat_coords) * np.sqrt(self.noise_perturb_sigma),
+                    feat_coords  +
+                    torch.randn_like(feat_coords) * self.noise_perturb_sigma,
                     0, 1)
 
         # Split the coordinates
