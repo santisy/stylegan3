@@ -14,8 +14,6 @@ import torch
 import torch.nn.functional as F
 sys.path.insert(0, '.')
 
-from imagen_pytorch import Unet, Imagen, ImagenTrainer
-
 import dnnlib
 import legacy
 from torch_utils import misc
@@ -25,6 +23,7 @@ import torchvision.utils as tvu
 from utils.utils import delete_file
 from diffusions.dataset import Dataset
 from diffusions.decode import decode_nc
+from diffusions.contruct_trainer import construct_imagen_trainer
 
 
 
@@ -95,33 +94,7 @@ def train_diffusion(**kwargs):
     torch.backends.cudnn.allow_tf32 = False             # Improves numerical accuracy.
 
     # Diffusion Unet Module and optimizer --------------------
-    unet = Unet(dim=opts.dim,
-                channels=G.feat_coord_dim,
-                dim_mults=opts.dim_mults,
-                num_resnet_blocks=opts.num_resnet_blocks,
-                layer_attns=(False, False, True, True),
-                layer_cross_attns = False,
-                use_linear_attn = True,
-                cond_on_text=False
-                )
-    imagen = Imagen(
-            condition_on_text = False,
-            unets = (unet, ),
-            image_sizes = (opts.feat_spatial_size, ),
-            timesteps = 1000,
-            channels=G.feat_coord_dim,
-            auto_normalize_img=True,
-            min_snr_gamma=5,
-            min_snr_loss_weight=True,
-            dynamic_thresholding=False,
-            pred_objectives='noise', # noise or x_start
-            loss_type='l2'
-            )
-    trainer = ImagenTrainer(imagen=imagen,
-                            imagen_checkpoint_path=None, # TODO: continue training
-                            lr=opts.train_lr,
-                            cosine_decay_max_steps=None,  # Note I manually change the eta_min to 1e-5
-                            ).to(device)
+    trainer = construct_imagen_trainer(G, opts, device, ckpt_path=None)
 
     # ------------------------------
 

@@ -7,7 +7,7 @@ import PIL.Image
 import numpy as np
 import torch
 
-__all__ = ['SimpleDataset']
+__all__ = ['SimpleDataset', 'SimpleDatasetForMetric']
 
 class SimpleDataset:
     def __init__(self,
@@ -63,3 +63,43 @@ class SimpleDataset:
             return img_tensor
         else:
             raise StopIteration
+
+class SimpleDatasetForMetric(torch.utils.data.Dataset):
+    def __init__(self,
+                 dataset: str,
+                 device: torch.device):
+        """
+            Simple dataset to extract the images from zip file and return a 
+            batch size 1 CUDA tensor (uint8 as required for FID calculation).
+            Args:
+                dataset (str): where the zip dataset files locate.
+                device (torch.device): what is the torch device
+        """
+
+        assert os.path.isfile(dataset) and dataset.endswith('zip')
+        self._zipfile = zipfile.ZipFile(dataset)
+        self._all_fnames = set(self._zipfile.namelist())
+        PIL.Image.init()
+        self._image_fnames = sorted(fname for fname in self._all_fnames
+                                    if self._file_ext(fname)
+                                    in PIL.Image.EXTENSION)
+        self.data_len = len(self._image_fnames)
+        self.device = device
+
+    @staticmethod
+    def _file_ext(fname):
+        return os.path.splitext(fname)[1].lower()
+
+    def _open_file(self, fname):
+        return self._zipfile.open(fname, 'r')
+
+    def __len__(self):
+        return self.data_len
+
+    def __getitem__(self, idx):
+        fname = self._image_fnames[idx]
+        with self._open_file(fname) as f:
+            image = np.array(PIL.Image.open(f))
+        image = image.transpose(2, 0, 1)
+        img_tensor = torch.from_numpy(image.copy())
+        return img_tensor
