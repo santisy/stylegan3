@@ -12,7 +12,10 @@ class Dataset(torch.utils.data.Dataset):
                  folder_path: str,
                  dim: int=16,
                  size: int=16,
-                 use_kl_reg: bool=False):
+                 use_kl_reg: bool=False,
+                 noise_perturb: bool=False,
+                 noise_perturb_sigma: float=-1.0,
+                 ):
         """
             Args:
                 folder_path (str): The extracted neural coordinates 'npy' file
@@ -23,12 +26,18 @@ class Dataset(torch.utils.data.Dataset):
                     (default: 16)
                 use_kl_reg (bool): If using KL regularization or not.
                     (default: False)
+                noise_perturb (bool): If using noise perturbation.
+                    (default: False)
+                noise_perturb_sigma (float): noise_perturbation sigma. 
+                    (default: -1.0)
         """
         self._npy_files = glob.glob(os.path.join(folder_path, f'*.npz'))
 
         self._dim = dim
         self._size = size
         self._use_kl_reg = use_kl_reg
+        self._noise_perturb = noise_perturb
+        self._noise_perturb_sigma = noise_perturb_sigma
 
     def __len__(self):
         return len(self._npy_files)
@@ -52,5 +61,8 @@ class Dataset(torch.utils.data.Dataset):
         if ni.shape[1] != self._size:
             raise RuntimeError('Size of neural coordinates wrong.'
                                f' required {self._size} vs {ni.shape[1]}')
+
+        if self._noise_perturb:
+            ni = np.random.normal(size=ni.shape) * self._noise_perturb_sigma + ni
 
         return ni
