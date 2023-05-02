@@ -63,6 +63,6 @@ class Dataset(torch.utils.data.Dataset):
                                f' required {self._size} vs {ni.shape[1]}')
 
         if self._noise_perturb:
-            ni = np.random.normal(size=ni.shape) * self._noise_perturb_sigma + ni
+            ni = np.clip(np.random.normal(size=ni.shape) * self._noise_perturb_sigma + ni, 0, 1)
 
         return ni
