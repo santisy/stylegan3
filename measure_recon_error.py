@@ -105,7 +105,5 @@ def test_recon_main(
     pbar.close()
 
 
-
 if __name__ == '__main__':
     test_recon_main()
-

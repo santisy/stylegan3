@@ -33,6 +33,8 @@ os.makedirs(METRIC_ROOT, exist_ok=True)
 @click.option('--exp_name', type=str, required=True)
 @click.option('--generate_batch_size', type=int, default=32, show_default=True)
 @click.option('--sample_total_img', type=int, default=50000, show_default=True)
+@click.option('--skip_gen', type=bool, default=False, show_default=True,
+              help='Skip the generation process.')
 def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
 
@@ -57,44 +59,48 @@ def main(**kwargs):
                                               device,
                                               opts.network_diff_pkl).eval()
 
-    # Diffusion Generate images.
-    g_batch_size = opts.generate_batch_size
-    pbar = tqdm.tqdm(total = opts.sample_total_img // g_batch_size,
-                     desc='Diffusion Generation: ')
-    for i in range(opts.sample_total_img // g_batch_size):
-        with torch.no_grad():
-            sample_ni = diff_model.sample(batch_size=g_batch_size,
-                                          use_tqdm=False)
-        with torch.no_grad():
-            sample_imgs = decode_nc(G, sample_ni).cpu()
-            sample_imgs = sample_imgs.permute(0, 2, 3, 1)
-            sample_imgs = sample_imgs.numpy()
-            sample_imgs = (np.clip(sample_imgs, -1, 1) + 1) / 2.0 * 255.0
-            sample_imgs = sample_imgs.astype(np.uint8)
-        for j, img in enumerate(sample_imgs):
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(os.path.join(exported_out,
-                                     f'{i * g_batch_size + j:07d}.jpg'),
-                        img)
-        pbar.update(1)
-    pbar.close()
+    if not opts.skip_gen:
+        # Diffusion Generate images.
+        g_batch_size = opts.generate_batch_size
+        pbar = tqdm.tqdm(total = opts.sample_total_img // g_batch_size,
+                        desc='Diffusion Generation: ')
+        for i in range(opts.sample_total_img // g_batch_size):
+            with torch.no_grad():
+                sample_ni = diff_model.sample(batch_size=g_batch_size,
+                                            use_tqdm=False)
+            with torch.no_grad():
+                sample_imgs = decode_nc(G, sample_ni).cpu()
+                sample_imgs = sample_imgs.permute(0, 2, 3, 1)
+                sample_imgs = sample_imgs.numpy()
+                sample_imgs = (np.clip(sample_imgs, -1, 1) + 1) / 2.0 * 255.0
+                sample_imgs = sample_imgs.astype(np.uint8)
+            for j, img in enumerate(sample_imgs):
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(os.path.join(exported_out,
+                                        f'{i * g_batch_size + j:07d}.jpg'),
+                            img)
+            pbar.update(1)
+        pbar.close()
+    else:
+        print('\033[93m[WARNING] Skipping the generation process.\033[00m')
 
     # Calculate
     metric_dict = torch_fidelity.calculate_metrics(
         input1=exported_out,
-        input2=SimpleDatasetForMetric(opts.real_data, device=device),
+        input2=opts.real_data,
         fid=True,
         isc=True,
         cache_root=METRIC_ROOT,
         cache=True,
         input2_cache_name=f'{data_name}_stats',
         cuda=True,
-        verbose=True
+        verbose=True,
+        samples_find_deep=True
     )
 
     # Results
     with open(os.path.join(METRIC_ROOT, f'{exp_name}_metric_result.json'),
-              'r') as f: 
+              'w') as f: 
         json.dump(metric_dict, f)
 
 

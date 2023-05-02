@@ -3,6 +3,7 @@
 import os
 import zipfile
 
+import pyspng
 import PIL.Image
 import numpy as np
 import torch
@@ -77,8 +78,9 @@ class SimpleDatasetForMetric(torch.utils.data.Dataset):
         """
 
         assert os.path.isfile(dataset) and dataset.endswith('zip')
-        self._zipfile = zipfile.ZipFile(dataset)
-        self._all_fnames = set(self._zipfile.namelist())
+        self._data_path = dataset
+        self._zipfile = None
+        self._all_fnames = set(self._get_zipfile().namelist())
         PIL.Image.init()
         self._image_fnames = sorted(fname for fname in self._all_fnames
                                     if self._file_ext(fname)
@@ -90,8 +92,13 @@ class SimpleDatasetForMetric(torch.utils.data.Dataset):
     def _file_ext(fname):
         return os.path.splitext(fname)[1].lower()
 
+    def _get_zipfile(self):
+        if self._zipfile is None:
+            self._zipfile = zipfile.ZipFile(self._data_path)
+        return self._zipfile
+
     def _open_file(self, fname):
-        return self._zipfile.open(fname, 'r')
+        return self._get_zipfile().open(fname, 'r')
 
     def __len__(self):
         return self.data_len
