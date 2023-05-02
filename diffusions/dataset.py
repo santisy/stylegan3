@@ -64,5 +64,6 @@ class Dataset(torch.utils.data.Dataset):
 
         if self._noise_perturb:
             ni = np.clip(np.random.normal(size=ni.shape) * self._noise_perturb_sigma + ni, 0, 1)
+            ni = ni.astype(np.float32)
 
         return ni
