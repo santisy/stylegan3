@@ -103,7 +103,7 @@ def train_diffusion(**kwargs):
                       dim=G.feat_coord_dim,
                       size=opts.feat_spatial_size,
                       use_kl_reg=use_kl_reg,
-                      noise_perturb=G.noise_purturb,
+                      noise_perturb=G.noise_perturb,
                       noise_perturb_sigma=G.noise_perturb_sigma,
                       )
     sampler = misc.InfiniteSampler(dataset)
