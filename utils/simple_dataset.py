@@ -26,8 +26,9 @@ class SimpleDataset:
         """
 
         assert os.path.isfile(dataset) and dataset.endswith('zip')
-        self._zipfile = zipfile.ZipFile(dataset)
-        self._all_fnames = set(self._zipfile.namelist())
+        self._data_path = dataset
+        self._zipfile = None
+        self._all_fnames = set(self._get_zipfile().namelist())
         PIL.Image.init()
         self._image_fnames = sorted(fname for fname in self._all_fnames
                                     if self._file_ext(fname)
@@ -42,7 +43,17 @@ class SimpleDataset:
         return os.path.splitext(fname)[1].lower()
 
     def _open_file(self, fname):
-        return self._zipfile.open(fname, 'r')
+        return self._get_zipfile().open(fname, 'r')
+
+    def _get_zipfile(self):
+        if self._zipfile is None:
+            self._zipfile = zipfile.ZipFile(self._data_path)
+        return self._zipfile
+    
+    def retrieve_by_idx(self, idx) -> PIL.Image.Image:
+        with self._open_file(self._image_fnames[idx]) as f:
+            image = np.array(PIL.Image.open(f)).copy()
+        return image
 
     def __len__(self):
         return self.data_len

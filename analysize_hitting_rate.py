@@ -11,9 +11,7 @@
 import os
 
 import click
-import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 import torch
 import tqdm
 
@@ -90,21 +88,9 @@ def generate_images(
     # Closing
     pbar.close()
 
-    # Plotting
-    coord_slot_stats = coord_slot_stats.mean(axis=0)
-    coord_slot_stats = coord_slot_stats / np.sum(coord_slot_stats)
+    # Save
     with open(os.path.join(outdir, 'coord_split_stats.npy'), 'wb') as f:
         np.save(f, coord_slot_stats)
-    sns.set_style("whitegrid")
-    sns.barplot(x=np.arange(len(coord_slot_stats)),
-                y=coord_slot_stats,
-                palette="rocket")    
-    plt.title("Indices Hitting Ratio")
-    plt.xlabel("Indices")
-    plt.ylabel("Ratio (%)")
-
-    # Show the plot
-    plt.show()
 
 #----------------------------------------------------------------------------
 

@@ -14,7 +14,6 @@ import dnnlib
 import legacy
 from diffusions.contruct_trainer import construct_imagen_trainer
 from diffusions.decode import decode_nc
-from utils.simple_dataset import SimpleDatasetForMetric
 
 torch.manual_seed(0)
 np.random.seed(0)
