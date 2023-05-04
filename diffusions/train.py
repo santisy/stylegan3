@@ -58,6 +58,7 @@ from diffusions.contruct_trainer import construct_imagen_trainer
 @click.option('--num_resnet_blocks', type=int,
               help='Number of residual blocks.',
               default=3, show_default=True)
+@click.option('--noise_scheduler', type=str, default='cosine')
 
 def train_diffusion(**kwargs):
 

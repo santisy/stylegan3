@@ -14,6 +14,10 @@ import dnnlib
 import legacy
 from diffusions.contruct_trainer import construct_imagen_trainer
 from diffusions.decode import decode_nc
+from diffusions.dpm_solver import DPM_Solver 
+from diffusions.dpm_solver import NoiseScheduleVP 
+from diffusions.dpm_solver import GaussianDiffusionContinuousTimes
+from diffusions.dpm_solver import log_snr_to_alpha_sigma
 
 torch.manual_seed(0)
 np.random.seed(0)
@@ -34,6 +38,9 @@ os.makedirs(METRIC_ROOT, exist_ok=True)
 @click.option('--sample_total_img', type=int, default=50000, show_default=True)
 @click.option('--skip_gen', type=bool, default=False, show_default=True,
               help='Skip the generation process.')
+@click.option('--use_dpm_solver', type=bool,
+              help='Use DPM solver or not to accelerate the sampling.',
+              default=True)
 def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
 
@@ -58,6 +65,20 @@ def main(**kwargs):
                                               device,
                                               opts.network_diff_pkl).eval()
 
+    # Wrap it to DPM-solver
+    if opts.use_dpm_solver:
+        noise_scheduler = GaussianDiffusionContinuousTimes(
+            noise_schedule=cfg.get('noise_scheduler', 'cosine'),
+            timesteps=1000)
+        t = torch.linspace(0, 1, 1000, device=device)
+        log_snr = noise_scheduler.log_snr(t)
+        alphas, _ = log_snr_to_alpha_sigma(log_snr)
+        alphas_cumprod = (alphas * alphas).detach()
+        dpm_solver = DPM_Solver(diff_model.unets[0],
+                                NoiseScheduleVP(alphas_cumprod=alphas_cumprod),
+                                algorithm_type='dpmsolver')
+    
+
     if not opts.skip_gen:
         # Diffusion Generate images.
         g_batch_size = opts.generate_batch_size
@@ -65,8 +86,26 @@ def main(**kwargs):
                         desc='Diffusion Generation: ')
         for i in range(opts.sample_total_img // g_batch_size):
             with torch.no_grad():
-                sample_ni = diff_model.sample(batch_size=g_batch_size,
-                                            use_tqdm=False)
+                if opts.use_dpm_solver:
+                    sample_ni = dpm_solver.sample(
+                                        torch.randn(g_batch_size,
+                                                    G.feat_coord_dim,
+                                                    cfg.feat_spatial_size,
+                                                    cfg.feat_spatial_size).to(device),
+                                        steps=100,
+                                        order=3,
+                                        skip_type="time_uniform",
+                                        method="multistep",
+                                    )
+                    sample_ni = (sample_ni + 1.0) / 2.0
+                    print(sample_ni.max(), sample_ni.min())
+                    sample_ni = torch.clip(sample_ni, 0, 1)
+                    import pdb; pdb.set_trace()
+                else:
+                    sample_ni = diff_model.sample(batch_size=g_batch_size,
+                                                  use_tqdm=False)
+                if i == 0:
+                    print(f'\033[92mThe sample result size is {sample_ni.shape}.\033[00m')
             with torch.no_grad():
                 sample_imgs = decode_nc(G, sample_ni).cpu()
                 sample_imgs = sample_imgs.permute(0, 2, 3, 1)

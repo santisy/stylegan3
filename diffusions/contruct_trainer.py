@@ -26,6 +26,7 @@ def construct_imagen_trainer(G, cfg, device, ckpt_path=None):
             min_snr_gamma=5,
             min_snr_loss_weight=True,
             dynamic_thresholding=False,
+            noise_schedules=cfg.get('noise_scheduler', 'cosine'), # TODO, is this necessary? Now we are `cosine` scheduler
             pred_objectives='noise', # noise or x_start
             loss_type='l2'
             )
