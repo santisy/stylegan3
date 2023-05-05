@@ -59,7 +59,8 @@ from diffusions.contruct_trainer import construct_imagen_trainer
               help='Number of residual blocks.',
               default=3, show_default=True)
 @click.option('--noise_scheduler', type=str, default='cosine')
-
+@click.option('--no_noise_perturb', type=bool, default=False,
+              help='Disable noise perturbation when tranining diffusion.')
 def train_diffusion(**kwargs):
 
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
@@ -104,7 +105,7 @@ def train_diffusion(**kwargs):
                       dim=G.feat_coord_dim,
                       size=opts.feat_spatial_size,
                       use_kl_reg=use_kl_reg,
-                      noise_perturb=G.noise_perturb,
+                      noise_perturb=G.noise_perturb if not opts.no_noise_perturb else False,
                       noise_perturb_sigma=G.noise_perturb_sigma,
                       )
     sampler = misc.InfiniteSampler(dataset)

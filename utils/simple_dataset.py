@@ -3,7 +3,6 @@
 import os
 import zipfile
 
-import pyspng
 import PIL.Image
 import numpy as np
 import torch

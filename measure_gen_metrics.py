@@ -104,6 +104,7 @@ def main(**kwargs):
                 else:
                     sample_ni = diff_model.sample(batch_size=g_batch_size,
                                                   use_tqdm=False)
+                    sample_ni = torch.clip(sample_ni, 0, 1)
                 if i == 0:
                     print(f'\033[92mThe sample result size is {sample_ni.shape}.\033[00m')
             with torch.no_grad():
@@ -115,7 +116,7 @@ def main(**kwargs):
             for j, img in enumerate(sample_imgs):
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 cv2.imwrite(os.path.join(exported_out,
-                                        f'{i * g_batch_size + j:07d}.jpg'),
+                                        f'{i * g_batch_size + j:07d}.png'),
                             img)
             pbar.update(1)
         pbar.close()

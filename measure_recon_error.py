@@ -28,12 +28,16 @@ from utils.simple_dataset import SimpleDataset
               type=int, default=-1, show_default=True)
 @click.option('--runs', help='How many runs in total', type=int, default=1,
               show_default=True)
+@click.option('--max_save',
+              help='Maximum number of reconstructed images to be saved.',
+              default=-1, show_default=True, type=int)
 def test_recon_main(
     network_pkl: str,
     dataset: str,
     outdir: str,
     last_split_n: int=-1,
     runs: int=10,
+    max_save: int=-1,
 ):
 
     # The device
@@ -65,6 +69,7 @@ def test_recon_main(
     ssim_collect = torch.zeros(runs, len(data_iter)).to(device)
 
     # Iterate
+    count = 0
     pbar = tqdm.tqdm(total=len(data_iter) * runs)
 
     for j in range(runs):
@@ -79,15 +84,16 @@ def test_recon_main(
             ssim_collect[j, i] = ssim_fn(rec, img).detach()
 
             # Save images (only save images at the first run)
-            if j == 0:
+            if j == 0 and ((max_save > 0 and count > max_save) or max_save < 0):
                 rec_img = rec[0].permute(1, 2, 0).cpu()
                 rec_img = torch.clip(rec_img, -1, 1)
                 rec_img = (rec_img.numpy() + 1.0) / 2.0 * 255.0
                 rec_img = cv2.cvtColor(rec_img.astype(np.uint8), cv2.COLOR_RGB2BGR)
                 cv2.imwrite(os.path.join(outdir, f'rec_{i:06d}.png'), rec_img)
             
-            # Update pbar
+            # Update pbar and counts
             pbar.update(1)
+            count += 1
 
     # Record LPIPS
     lpips_collect = lpips_collect.mean(dim=0)
