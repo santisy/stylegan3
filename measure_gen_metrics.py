@@ -82,9 +82,9 @@ def main(**kwargs):
     if not opts.skip_gen:
         # Diffusion Generate images.
         g_batch_size = opts.generate_batch_size
-        pbar = tqdm.tqdm(total = opts.sample_total_img // g_batch_size,
+        pbar = tqdm.tqdm(total = opts.sample_total_img // g_batch_size + 1,
                         desc='Diffusion Generation: ')
-        for i in range(opts.sample_total_img // g_batch_size):
+        for i in range(opts.sample_total_img // g_batch_size + 1):
             with torch.no_grad():
                 if opts.use_dpm_solver:
                     sample_ni = dpm_solver.sample(
