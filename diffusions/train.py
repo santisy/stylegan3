@@ -61,6 +61,8 @@ from diffusions.contruct_trainer import construct_imagen_trainer
 @click.option('--noise_scheduler', type=str, default='cosine')
 @click.option('--no_noise_perturb', type=bool, default=False,
               help='Disable noise perturbation when tranining diffusion.')
+@click.option('--resume', type=str, default=None,
+              help='Resuming the training checkpoint.')
 def train_diffusion(**kwargs):
 
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
@@ -96,7 +98,7 @@ def train_diffusion(**kwargs):
     torch.backends.cudnn.allow_tf32 = False             # Improves numerical accuracy.
 
     # Diffusion Unet Module and optimizer --------------------
-    trainer = construct_imagen_trainer(G, opts, device, ckpt_path=None)
+    trainer = construct_imagen_trainer(G, opts, device, ckpt_path=opts.resume)
 
     # ------------------------------
 
