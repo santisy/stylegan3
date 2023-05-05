@@ -34,10 +34,11 @@ def construct_imagen_trainer(G, cfg, device, ckpt_path=None):
     trainer = ImagenTrainer(imagen=imagen,
                             imagen_checkpoint_path=None, # TODO: continue training
                             lr=cfg.train_lr,
-                            cosine_decay_max_steps=None,  # Note I manually change the eta_min to 1e-5
+                            cosine_decay_max_steps=cfg.cosine_decay_max_steps,  # Note I manually change the eta_min to 1e-5
+                            warmup_steps=cfg.warmup_steps
                             )
 
     if ckpt_path is not None:
-        trainer.load(ckpt_path)
+        trainer.load(ckpt_path, only_model=cfg.only_load_model)
 
     return trainer.to(device)
