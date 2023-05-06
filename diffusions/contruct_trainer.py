@@ -4,7 +4,7 @@ from imagen_pytorch import Unet, Imagen, ImagenTrainer
 
 __all__ = ['construct_imagen_trainer']
 
-def construct_imagen_trainer(G, cfg, device, ckpt_path=None):
+def construct_imagen_trainer(G, cfg, device, ckpt_path=None, test_flag=False):
 
     unet = Unet(dim=cfg.dim,
                 channels=G.feat_coord_dim,
@@ -39,6 +39,7 @@ def construct_imagen_trainer(G, cfg, device, ckpt_path=None):
                             )
 
     if ckpt_path is not None:
-        trainer.load(ckpt_path, only_model=cfg.only_load_model)
+        trainer.load(ckpt_path,
+                     only_model=cfg.only_load_model if not test_flag else False)
 
     return trainer.to(device)

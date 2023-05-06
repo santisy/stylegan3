@@ -63,7 +63,8 @@ def main(**kwargs):
         diff_model = construct_imagen_trainer(G,
                                               cfg,
                                               device,
-                                              opts.network_diff_pkl).eval()
+                                              opts.network_diff_pkl,
+                                              test_flag=True).eval()
 
     # Wrap it to DPM-solver
     if opts.use_dpm_solver:
