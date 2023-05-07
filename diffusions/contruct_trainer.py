@@ -4,13 +4,26 @@ from imagen_pytorch import Unet, Imagen, ImagenTrainer
 
 __all__ = ['construct_imagen_trainer']
 
+def get_layer_attns(atten_range, total_len):
+    layer_attns = []
+
+    for i in range(1, total_len+1):
+        if i in atten_range:
+            layer_attns.append(True)
+        else:
+            layer_attns.append(False)
+
+    return tuple(layer_attns)
+
 def construct_imagen_trainer(G, cfg, device, ckpt_path=None, test_flag=False):
+    dim_mults = cfg.get('dim_mults', (1, 2, 2, 4))
 
     unet = Unet(dim=cfg.dim,
                 channels=G.feat_coord_dim,
-                dim_mults=cfg.get('dim_mults', (1, 2, 2, 4)),
+                dim_mults=dim_mults,
                 num_resnet_blocks=cfg.get('num_resnet_blocks', 3),
-                layer_attns=(False, False, True, True),
+                layer_attns=get_layer_attns(cfg.get('atten_layers', [3, 4]),
+                                            len(dim_mults)),
                 layer_cross_attns = False,
                 use_linear_attn = True,
                 cond_on_text=False

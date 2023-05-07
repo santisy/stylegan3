@@ -63,6 +63,9 @@ from diffusions.contruct_trainer import construct_imagen_trainer
               help='Disable noise perturbation when tranining diffusion.')
 @click.option('--resume', type=str, default=None,
               help='Resuming the training checkpoint.')
+@click.option('--atten_layers', type=lambda x:[int(y) for y in x.split(',')],
+              help='The resolution range to do attention.',
+              default='3,4', show_default=True)
 @click.option('--warmup_steps', type=int, default=None,
               show_default=True)
 @click.option('--cosine_decay_max_steps', type=int, default=None,
