@@ -84,17 +84,21 @@ def calc_flops_and_params(network_pkl: str,
         G = G.eval()
     
     # Caculate Parameters
-    hash_parameter_count = 0
+    hash_table_count = 0
+    hash_total_count = 0
     for hash_encoder in G.hash_encoder_list:
-        hash_parameter_count += count_parameters(hash_encoder)
+        hash_table_count += hash_encoder.embeddings.numel()
+        hash_total_count += count_parameters(hash_encoder)
     decoder_parameter_count = count_parameters(G.synthesis_network)
 
     print('\033[93mHash encoder total parameter counts:'
-          f' {hash_parameter_count/1e6:.4f}M\033[00m')
+          f' {hash_total_count/1e6:.4f}M\033[00m')
+    print('\033[93mHash encoder table parameter counts:'
+          f' {hash_table_count/1e6:.4f}M\033[00m')
     print('\033[93mDecoder total parameter counts:'
           f' {decoder_parameter_count/1e6:.4f}M\033[00m')
     print('\033[93mTotal parameter memory:'
-          f' {(decoder_parameter_count+hash_parameter_count)*4/1e9:.4f}Gb\033[00m')
+          f' {(decoder_parameter_count+hash_total_count)*4/1e9:.4f}Gb\033[00m')
 
     # Extract parameters
     init_res = G.init_res

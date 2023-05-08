@@ -55,9 +55,9 @@ from diffusions.contruct_trainer import construct_imagen_trainer
 @click.option('--dim_mults', type=lambda x:[int(y) for y in x.split(',')],
               help='The channel multiplication of the network.',
               default='1,2,2,4', show_default=True)
-@click.option('--num_resnet_blocks', type=int,
+@click.option('--num_resnet_blocks', type=lambda x:[int(y) for y in x.split(',')],
               help='Number of residual blocks.',
-              default=3, show_default=True)
+              default='4,4,4,4', show_default=True)
 @click.option('--noise_scheduler', type=str, default='cosine')
 @click.option('--no_noise_perturb', type=bool, default=False,
               help='Disable noise perturbation when tranining diffusion.')
