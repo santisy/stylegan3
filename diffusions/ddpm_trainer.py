@@ -55,7 +55,7 @@ class Trainer(object):
         self.image_size = diffusion_model.image_size
 
         # optimizer
-
+        self.train_lr = train_lr
         self.opt = Adam(diffusion_model.parameters(), lr = train_lr, betas = adam_betas)
 
         # for logging results in a folder periodically
@@ -125,7 +125,10 @@ class Trainer(object):
         """Place holder"""
         pass
 
-    def __all__(self, data):
+    def get_lr(self, *args, **kwargs):
+        return self.train_lr
+
+    def __call__(self, data):
         if self.auto_normalize:
             data = data * 2.0 - 1.0
 
