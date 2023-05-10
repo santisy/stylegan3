@@ -1,6 +1,7 @@
 import math
 
 import torch
+import torch.nn as nn
 from ema_pytorch import EMA
 from torch.optim import Adam
 from accelerate import Accelerator
@@ -14,7 +15,7 @@ def has_int_squareroot(num):
 def exists(x):
     return x is not None
 
-class Trainer(object):
+class Trainer(nn.Module):
     def __init__(
         self,
         diffusion_model,
@@ -112,8 +113,8 @@ class Trainer(object):
         if exists(self.accelerator.scaler) and exists(data['scaler']):
             self.accelerator.scaler.load_state_dict(data['scaler'])
 
-    def sample(self, batch_size: int):
-        with torch.no_grad:
+    def sample(self, batch_size: int, **kwargs):
+        with torch.no_grad():
             self.ema.ema_model.eval()
             out = self.ema.ema_model.sample(batch_size=batch_size)
         if self.auto_normalize:
@@ -128,22 +129,17 @@ class Trainer(object):
     def get_lr(self, *args, **kwargs):
         return self.train_lr
 
-    def __call__(self, data):
+    def forward(self, data, **kwargs):
         if self.auto_normalize:
             data = data * 2.0 - 1.0
+        data = data.to(self.device)
 
         accelerator = self.accelerator
-        device = accelerator.device
-        total_loss = 0.
 
-        for _ in range(self.gradient_accumulate_every):
+        with self.accelerator.autocast():
+            loss = self.model(data)
 
-            with self.accelerator.autocast():
-                loss = self.model(data)
-                loss = loss / self.gradient_accumulate_every
-                total_loss += loss.item()
-
-            self.accelerator.backward(loss)
+        self.accelerator.backward(loss)
 
         accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
 
@@ -156,4 +152,6 @@ class Trainer(object):
         self.ema.update()
 
         self.step += 1
+
+        return loss.item()
 

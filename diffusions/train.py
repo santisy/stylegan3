@@ -25,7 +25,10 @@ from diffusions.dataset import Dataset
 from diffusions.decode import decode_nc
 from diffusions.contruct_trainer import construct_imagen_trainer
 
-
+# Disable tqdm globally
+from tqdm import tqdm
+from functools import partialmethod
+tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 
 
 @click.command()

@@ -62,7 +62,8 @@ def construct_imagen_trainer(G, cfg, device, ckpt_path=None, test_flag=False):
     else:
         unet = Unet_DDPM(dim=cfg.dim,
                          channels=G.feat_coord_dim,
-                         dim_mults=dim_mults)
+                         dim_mults=dim_mults,
+                         learned_sinusoidal_cond=True)
         diffusion = ContinuousTimeGaussianDiffusion(unet,
                                                     image_size=cfg.feat_spatial_size,
                                                     num_sample_steps=1000,
@@ -71,7 +72,8 @@ def construct_imagen_trainer(G, cfg, device, ckpt_path=None, test_flag=False):
         trainer =  Trainer(diffusion,
                            train_lr=cfg.train_lr,
                            auto_normalize=True)
-        trainer.load(ckpt_path)
+        if ckpt_path is not None:
+            trainer.load(ckpt_path)
 
 
     return trainer.to(device)
