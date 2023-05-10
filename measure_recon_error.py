@@ -84,7 +84,7 @@ def test_recon_main(
             ssim_collect[j, i] = ssim_fn(rec, img).detach()
 
             # Save images (only save images at the first run)
-            if j == 0 and ((max_save > 0 and count > max_save) or max_save < 0):
+            if j == 0 and ((max_save > 0 and count < max_save) or max_save < 0):
                 rec_img = rec[0].permute(1, 2, 0).cpu()
                 rec_img = torch.clip(rec_img, -1, 1)
                 rec_img = (rec_img.numpy() + 1.0) / 2.0 * 255.0
