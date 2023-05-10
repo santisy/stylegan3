@@ -348,7 +348,7 @@ class Encoder(nn.Module):
                  feat_coord_dim=128,
                  ch=32,
                  num_res_blocks=4,
-                 attn_resolutions=2,
+                 attn_resolutions=None,
                  in_channels=3,
                  resolution=256,
                  z_channels=None,
@@ -391,8 +391,8 @@ class Encoder(nn.Module):
                                          temb_channels=self.temb_ch,
                                          dropout=dropout))
                 block_in = block_out
-                #if curr_res in attn_resolutions:
-                #    attn.append(AttnBlock(block_in))
+                if attn_resolutions is not None and  curr_res in attn_resolutions:
+                    attn.append(AttnBlock(block_in))
             down = nn.Module()
             down.block = block
             down.attn = attn
@@ -402,16 +402,17 @@ class Encoder(nn.Module):
             self.down.append(down)
 
         ## middle
-        #self.mid = nn.Module()
-        #self.mid.block_1 = ResnetBlock(in_channels=block_in,
-        #                               out_channels=block_in,
-        #                               temb_channels=self.temb_ch,
-        #                               dropout=dropout)
-        #self.mid.attn_1 = AttnBlock(block_in)
-        #self.mid.block_2 = ResnetBlock(in_channels=block_in,
-        #                               out_channels=block_in,
-        #                               temb_channels=self.temb_ch,
-        #                               dropout=dropout)
+        if attn_resolutions is not None:
+            self.mid = nn.Module()
+            self.mid.block_1 = ResnetBlock(in_channels=block_in,
+                                           out_channels=block_in,
+                                           temb_channels=self.temb_ch,
+                                           dropout=dropout)
+            self.mid.attn_1 = AttnBlock(block_in)
+            self.mid.block_2 = ResnetBlock(in_channels=block_in,
+                                           out_channels=block_in,
+                                           temb_channels=self.temb_ch,
+                                           dropout=dropout)
 
         # end
         self.norm_out = Normalize(block_in)

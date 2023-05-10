@@ -42,6 +42,7 @@ class HashAutoGenerator(nn.Module):
                  use_kl_reg: bool=False,
                  hash_res_ratio: int=1,
                  expand_dim: int=-1,
+                 attn_resolutions=None,
                  **kwargs):
         """
             Args:
@@ -86,6 +87,8 @@ class HashAutoGenerator(nn.Module):
                     (default: 1)
                 expand_dim (int): expand dimsion of neural indexing channel-wise.
                     (default: -1)
+                attn_resolutions (List): attn resolutions in encoder.
+                    (default: False)
         """
 
         super().__init__()
@@ -117,7 +120,8 @@ class HashAutoGenerator(nn.Module):
                                    num_res_blocks=4,
                                    num_downsamples=num_downsamples,
                                    resolution=res_max,
-                                   use_kl_reg=use_kl_reg
+                                   use_kl_reg=use_kl_reg,
+                                   attn_resolutions=attn_resolutions
                                    )
 
         self.hash_encoder_list = nn.ModuleList()
