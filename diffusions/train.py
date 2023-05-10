@@ -71,6 +71,7 @@ from diffusions.contruct_trainer import construct_imagen_trainer
 @click.option('--cosine_decay_max_steps', type=int, default=None,
               show_default=True)
 @click.option('--only_load_model', type=bool, default=False, show_default=True)
+@click.option('--use_ddpm', type=bool, default=False, show_default=True)
 
 def train_diffusion(**kwargs):
 
