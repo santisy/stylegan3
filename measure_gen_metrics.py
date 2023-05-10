@@ -5,6 +5,7 @@ import os
 
 import click
 import cv2
+import glob
 import numpy as np
 import torch
 import torch_fidelity
@@ -26,13 +27,50 @@ np.random.seed(0)
 METRIC_ROOT = 'metrics_cache'
 os.makedirs(METRIC_ROOT, exist_ok=True)
 
+def _measure_and_save(out_dir: str,
+                      real_dir: str,
+                      data_name: str,
+                      exp_name: str,
+                      eval_num: int):
+    print(f'\033[093mEvaluation on {eval_num/1000:.2f}k image.\033[00m')
+    # Calculate
+    metric_dict = torch_fidelity.calculate_metrics(
+        input1=out_dir,
+        input2=real_dir,
+        fid=True,
+        isc=True,
+        cache_root=METRIC_ROOT,
+        cache=True,
+        input2_cache_name=f'{data_name}_stats',
+        cuda=True,
+        verbose=True,
+        samples_find_deep=True
+    )
+
+    # Results
+    with open(os.path.join(METRIC_ROOT,
+                           f'{exp_name}_metric_result.txt'),
+              'a') as f: 
+        f.write(f'{eval_num}k img evaluation results:\n')
+        json.dump(metric_dict, f, ensure_ascii=False)
+        f.write('\n')
+
+
 @click.command()
 @click.option('--real_data', type=str, required=True)
-@click.option('--network_ae', 'network_ae_pkl',
-              help='Network pickle filename of autoencoder.', required=True)
-@click.option('--network_diff', 'network_diff_pkl',
-              help='Network pickle filename of diffusion unet.', required=True)
-@click.option('--diff_config', type=str, required=True)
+@click.option('--network_ae', 'network_ae_pkl', type=str,
+              help='Network pickle filename of autoencoder.',
+              default=None)
+@click.option('--network_diff', 'network_diff_pkl', type=str,
+              help='Network pickle filename of diffusion unet.',
+              default=None)
+@click.option('--diff_config', type=str, default=None)
+@click.option('--input_folder', type=str,
+              help='If given, will evaluate the images here.',
+              default=None)
+@click.option('--every_k', type=int,
+              help='If given, it will calculate fid and more every k images.',
+              default=None)
 @click.option('--exp_name', type=str, required=True)
 @click.option('--generate_batch_size', type=int, default=32, show_default=True)
 @click.option('--sample_total_img', type=int, default=50000, show_default=True)
@@ -46,25 +84,34 @@ def main(**kwargs):
 
     device = torch.device('cuda')
 
-    # Extract names
+    # Extract names and variables
     data_name = os.path.basename(opts.real_data).rstrip('.zip')
     exp_name = opts.exp_name
-    exported_out = os.path.join(METRIC_ROOT, exp_name)
+    g_batch_size = opts.generate_batch_size
+
+    # Construct networks
+    if opts.input_folder is None:
+        assert (opts.network_ae_pkl is not None and
+                opts.network_diff_pkl is not None and
+                opts.diff_config is not None)
+        exported_out = os.path.join(METRIC_ROOT, exp_name)
+        # Exported Images
+        with dnnlib.util.open_url(opts.network_ae_pkl) as f:
+            G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+            G = G.eval()
+        with open(opts.diff_config, 'r') as f:
+            cfg = dnnlib.EasyDict(json.load(f))
+            diff_model = construct_imagen_trainer(G,
+                                                cfg,
+                                                device,
+                                                opts.network_diff_pkl,
+                                                test_flag=True).eval()
+    else:
+        exported_out = opts.input_folder
 
     # Make folders
     os.makedirs(exported_out, exist_ok=True)
 
-    # Exported Images
-    with dnnlib.util.open_url(opts.network_ae_pkl) as f:
-        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
-        G = G.eval()
-    with open(opts.diff_config, 'r') as f:
-        cfg = dnnlib.EasyDict(json.load(f))
-        diff_model = construct_imagen_trainer(G,
-                                              cfg,
-                                              device,
-                                              opts.network_diff_pkl,
-                                              test_flag=True).eval()
 
     # Wrap it to DPM-solver
     if opts.use_dpm_solver:
@@ -80,11 +127,11 @@ def main(**kwargs):
                                 algorithm_type='dpmsolver')
     
 
-    if not opts.skip_gen:
+    if not opts.skip_gen and opts.input_folder is None:
         # Diffusion Generate images.
-        g_batch_size = opts.generate_batch_size
         pbar = tqdm.tqdm(total = opts.sample_total_img // g_batch_size + 1,
                         desc='Diffusion Generation: ')
+        measure_k_count = 0
         for i in range(opts.sample_total_img // g_batch_size + 1):
             with torch.no_grad():
                 if opts.use_dpm_solver:
@@ -120,29 +167,29 @@ def main(**kwargs):
                                         f'{i * g_batch_size + j:07d}.png'),
                             img)
             pbar.update(1)
+
+            if (opts.every_k is not None and
+                (i + 1) * g_batch_size // (opts.every_k * 1000) > measure_k_count) or \
+                i == opts.sample_total_img // g_batch_size:
+                measure_k_count += 1
+                _measure_and_save(exported_out,
+                                  opts.real_data,
+                                  data_name,
+                                  exp_name,
+                                  (i + 1) * g_batch_size)
+
+
         pbar.close()
     else:
+        total_num = len(glob.glob(os.path.join(exported_out, "**", "*.png"),
+                                  recursive=True))
         print('\033[93m[WARNING] Skipping the generation process.\033[00m')
 
-    # Calculate
-    metric_dict = torch_fidelity.calculate_metrics(
-        input1=exported_out,
-        input2=opts.real_data,
-        fid=True,
-        isc=True,
-        cache_root=METRIC_ROOT,
-        cache=True,
-        input2_cache_name=f'{data_name}_stats',
-        cuda=True,
-        verbose=True,
-        samples_find_deep=True
-    )
-
-    # Results
-    with open(os.path.join(METRIC_ROOT, f'{exp_name}_metric_result.json'),
-              'w') as f: 
-        json.dump(metric_dict, f)
-
+        _measure_and_save(exported_out,
+                          opts.real_data,
+                          data_name,
+                          exp_name,
+                          total_num)
 
 if __name__ == '__main__':
     main()
