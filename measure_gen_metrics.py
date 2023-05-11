@@ -76,8 +76,8 @@ def _measure_and_save(out_dir: str,
               help='Skip the generation process.')
 @click.option('--use_dpm_solver', type=bool,
               help='Use DPM solver or not to accelerate the sampling.',
-              default=True)
-@click.option('--seed', type=int, defult=0,
+              default=False)
+@click.option('--seed', type=int, default=0,
               help='Set the random seed.')
 def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
@@ -93,6 +93,7 @@ def main(**kwargs):
     data_name = os.path.basename(opts.real_data).rstrip('.zip')
     exp_name = opts.exp_name
     g_batch_size = opts.generate_batch_size
+    cfg = None
 
     # Construct networks
     if opts.input_folder is None:
@@ -119,7 +120,7 @@ def main(**kwargs):
 
 
     # Wrap it to DPM-solver
-    if opts.use_dpm_solver:
+    if opts.use_dpm_solver and cfg is not None:
         noise_scheduler = GaussianDiffusionContinuousTimes(
             noise_schedule=cfg.get('noise_scheduler', 'cosine'),
             timesteps=1000)
