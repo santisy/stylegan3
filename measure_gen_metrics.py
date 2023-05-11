@@ -20,8 +20,6 @@ from diffusions.dpm_solver import NoiseScheduleVP
 from diffusions.dpm_solver import GaussianDiffusionContinuousTimes
 from diffusions.dpm_solver import log_snr_to_alpha_sigma
 
-torch.manual_seed(0)
-np.random.seed(0)
 
 
 METRIC_ROOT = 'metrics_cache'
@@ -79,10 +77,17 @@ def _measure_and_save(out_dir: str,
 @click.option('--use_dpm_solver', type=bool,
               help='Use DPM solver or not to accelerate the sampling.',
               default=True)
+@click.option('--seed', type=int, defult=0,
+              help='Set the random seed.')
 def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
 
     device = torch.device('cuda')
+
+    # Set seed
+    torch.manual_seed(opts.seed)
+    np.random.seed(opts.seed)
+    print(f'\033[92mThe random seed is {opts.seed}.\033[00m')
 
     # Extract names and variables
     data_name = os.path.basename(opts.real_data).rstrip('.zip')
@@ -105,7 +110,7 @@ def main(**kwargs):
                                                 cfg,
                                                 device,
                                                 opts.network_diff_pkl,
-                                                test_flag=True).eval()
+                                                test_flag=True)
     else:
         exported_out = opts.input_folder
 
