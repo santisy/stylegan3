@@ -11,6 +11,7 @@ import time
 
 import numpy as np
 import torch
+import torch.distributed as tdist
 import torch.nn.functional as F
 sys.path.insert(0, '.')
 
@@ -123,12 +124,13 @@ def train_diffusion(**kwargs):
                       noise_perturb=G.noise_perturb if not opts.no_noise_perturb else False,
                       noise_perturb_sigma=G.noise_perturb_sigma,
                       )
-    sampler = misc.InfiniteSampler(dataset)
-    training_iter = iter(torch.utils.data.DataLoader(dataset=dataset,
-                                                     sampler=sampler,
-                                                     batch_size=opts.batch_size,
-                                                     prefetch_factor=2))
-    
+    trainer.add_train_dataset(dataset, batch_size=opts.batch_size)
+    main_p_flag = trainer.accelerator.is_main_process()
+    #sampler = misc.InfiniteSampler(dataset)
+    #training_iter = iter(torch.utils.data.DataLoader(dataset=dataset,
+    #                                                 sampler=sampler,
+    #                                                 batch_size=opts.batch_size,
+    #                                                 prefetch_factor=2))
 
     # Counting initials
     count = 0
@@ -139,18 +141,17 @@ def train_diffusion(**kwargs):
     # Main Loop Starts Here --------------------
     while True:
         # Get data and forward
-        real_ni = next(training_iter)
-        if use_kl_reg:
-            real_ni = F.sigmoid(real_ni)
-        loss = trainer(real_ni, unet_number=1)
-        trainer.update(unet_number=1)
+        # real_ni = next(training_iter)
+        # loss = trainer(real_ni, unet_number=1)
+        # trainer.update(unet_number=1)
+        loss = trainer.train_step(unet_number = 1)
 
         # Increase couting
         count += opts.batch_size
         global_step = count // 1000
 
         # Recording
-        if count % (opts.record_k * 1000) == 0:
+        if count % (opts.record_k * 1000) == 0 and main_p_flag:
             cur_lr = trainer.get_lr(unet_number=1)
             stats_tfevents.add_scalar('Loss/diff_loss', loss,
                                       global_step=global_step)
@@ -164,7 +165,7 @@ def train_diffusion(**kwargs):
                   f'time {dnnlib.util.format_time(tick_end_time - start_time)}\t')
 
         # Sampling
-        if count % (opts.sample_k * 1000) == 0:
+        if count % (opts.sample_k * 1000) == 0 and main_p_flag:
             print('Save image ...')
             sample_ni = trainer.sample(batch_size=opts.sample_num, use_tqdm=False)
             print('Value range of sampled nc: ', sample_ni.min(), sample_ni.max())
@@ -188,7 +189,7 @@ def train_diffusion(**kwargs):
             ), global_step)
 
         # Save network snapshot
-        if count % (opts.snap_k * 1000) == 0:
+        if count % (opts.snap_k * 1000) == 0 and main_p_flag:
             print(f'Save network-snapshot-{global_step}.pkl ...')
             save_file = os.path.join(run_dir, f'network-snapshot-{global_step}.pkl')
             save_snapshot_list.append(save_file)
@@ -196,6 +197,13 @@ def train_diffusion(**kwargs):
             if len(save_snapshot_list) > 5:
                 delete_file(save_snapshot_list.pop(0))
 
+        # Set the barrier
+        if tdist.is_initialized() and (
+            count % (opts.record_k * 1000) == 0 or
+            count % (opts.sample_k * 1000) == 0 or
+            count % (opts.snap_k * 1000) == 0
+        ):
+            tdist.barrier()
 
 if __name__ == '__main__':
     train_diffusion()
