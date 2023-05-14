@@ -123,7 +123,7 @@ def train_diffusion(**kwargs):
                       noise_perturb_sigma=G.noise_perturb_sigma,
                       )
     trainer.add_train_dataset(dataset, batch_size=opts.batch_size)
-    main_p_flag = trainer.accelerator.is_main_process()
+    main_p_flag = trainer.accelerator.is_main_process
     #sampler = misc.InfiniteSampler(dataset)
     #training_iter = iter(torch.utils.data.DataLoader(dataset=dataset,
     #                                                 sampler=sampler,
