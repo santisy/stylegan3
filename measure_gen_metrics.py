@@ -79,7 +79,7 @@ def _measure_and_save(out_dir: str,
               default=False)
 @click.option('--seed', type=int, default=0,
               help='Set the random seed.')
-@click.option('--save_naming_with_seed', type=False, default=False,
+@click.option('--save_naming_with_seed', type=bool, default=False,
               help='Save images numbering with seed increase.')
 def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
