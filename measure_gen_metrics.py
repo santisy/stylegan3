@@ -79,6 +79,8 @@ def _measure_and_save(out_dir: str,
               default=False)
 @click.option('--seed', type=int, default=0,
               help='Set the random seed.')
+@click.option('--save_naming_with_seed', type=bool, default=False,
+              help='Save images numbering with seed increase.')
 def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
 
@@ -91,9 +93,17 @@ def main(**kwargs):
 
     # Extract names and variables
     data_name = os.path.basename(opts.real_data).rstrip('.zip')
-    exp_name = opts.exp_name
+    exp_name = opts.exp_name + f'_seed{opts.seed}'
     g_batch_size = opts.generate_batch_size
     cfg = None
+
+    # Initial count
+    if not opts.save_naming_with_seed:
+        start_count = 0
+    else:
+        start_count = opts.seed * (
+                        opts.sample_total_img // g_batch_size + 1
+                        ) * g_batch_size
 
     # Construct networks
     if opts.input_folder is None:
@@ -170,7 +180,7 @@ def main(**kwargs):
             for j, img in enumerate(sample_imgs):
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 cv2.imwrite(os.path.join(exported_out,
-                                        f'{i * g_batch_size + j:07d}.png'),
+                                        f'{start_count + i * g_batch_size + j:07d}.png'),
                             img)
             pbar.update(1)
 
