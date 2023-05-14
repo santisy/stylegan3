@@ -81,9 +81,6 @@ def train_diffusion(**kwargs):
 
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
 
-    # The device
-    device = torch.device('cuda')
-
     # Prepare folder and tensorboard
     run_dir = os.path.join('training_runs', opts.exp_id)
     os.makedirs(run_dir, exist_ok=True)
@@ -99,7 +96,7 @@ def train_diffusion(**kwargs):
     use_kl_reg = None
     # The encoder decoder one
     with dnnlib.util.open_url(opts.encoder_decoder_network) as f:
-        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+        G = legacy.load_network_pkl(f)['G_ema'] # type: ignore
         G = G.eval()
         use_kl_reg = G.use_kl_reg
 
@@ -112,7 +109,8 @@ def train_diffusion(**kwargs):
     torch.backends.cudnn.allow_tf32 = False             # Improves numerical accuracy.
 
     # Diffusion Unet Module and optimizer --------------------
-    trainer = construct_imagen_trainer(G, opts, device, ckpt_path=opts.resume)
+    trainer = construct_imagen_trainer(G, opts, device=None, ckpt_path=opts.resume)
+    G = G.to(trainer.device) # This device is coming from accelerator
 
     # ------------------------------
 

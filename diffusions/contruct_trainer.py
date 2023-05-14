@@ -19,7 +19,7 @@ def get_layer_attns(atten_range, total_len):
 
     return tuple(layer_attns)
 
-def construct_imagen_trainer(G, cfg, device, ckpt_path=None, test_flag=False):
+def construct_imagen_trainer(G, cfg, device=None, ckpt_path=None, test_flag=False):
     dim_mults = cfg.get('dim_mults', (1, 2, 2, 4))
     use_ddpm = cfg.get('use_ddpm', False)
 
@@ -75,5 +75,7 @@ def construct_imagen_trainer(G, cfg, device, ckpt_path=None, test_flag=False):
         if ckpt_path is not None:
             trainer.load(ckpt_path)
 
+    if device is not None:
+        trainer = trainer.to(device)
 
-    return trainer.to(device)
+    return trainer
