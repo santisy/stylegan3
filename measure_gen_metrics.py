@@ -93,7 +93,7 @@ def main(**kwargs):
 
     # Extract names and variables
     data_name = os.path.basename(opts.real_data).rstrip('.zip')
-    exp_name = opts.exp_name
+    exp_name = opts.exp_name + f'_seed{opts.seed}'
     g_batch_size = opts.generate_batch_size
     cfg = None
 
