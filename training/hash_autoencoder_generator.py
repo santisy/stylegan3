@@ -43,6 +43,7 @@ class HashAutoGenerator(nn.Module):
                  hash_res_ratio: int=1,
                  expand_dim: int=-1,
                  attn_resolutions=None,
+                 fused_spatial=False,
                  **kwargs):
         """
             Args:
@@ -89,6 +90,8 @@ class HashAutoGenerator(nn.Module):
                     (default: -1)
                 attn_resolutions (List): attn resolutions in encoder.
                     (default: False)
+                fused_spatial (bool): Fused spatial. y in hash and x in modulation.
+                    (default: False)
         """
 
         super().__init__()
@@ -101,6 +104,9 @@ class HashAutoGenerator(nn.Module):
         self.noise_perturb = noise_perturb
         self.use_kl_reg = use_kl_reg
         self.expand_dim = expand_dim
+        self.fused_spatial = fused_spatial
+
+        spatial_coord_dim = 2 if not fused_spatial else 1
 
         if noise_perturb_sigma > 0:
             self.noise_perturb_sigma = noise_perturb_sigma
@@ -126,7 +132,7 @@ class HashAutoGenerator(nn.Module):
 
         self.hash_encoder_list = nn.ModuleList()
         for _ in range(self.hash_encoder_num):
-            self.hash_encoder_list.append(GridEncoder(input_dim=feat_coord_dim_per_table + 2,
+            self.hash_encoder_list.append(GridEncoder(input_dim=feat_coord_dim_per_table + spatial_coord_dim,
                                             num_levels=table_num,
                                             level_dim=level_dim,
                                             base_resolution=res_min,
@@ -142,6 +148,7 @@ class HashAutoGenerator(nn.Module):
                                             direct_coord_input=True,
                                             no_modulated_linear=False,
                                             one_hash_group=True,
+                                            fused_spatial=fused_spatial
                                             ))
         dprint('Number of groups of hash tables is'
                f' {len(self.hash_encoder_list)}', color='g')
@@ -201,6 +208,13 @@ class HashAutoGenerator(nn.Module):
         feat_coords_tuple = feat_coords.chunk(self.hash_encoder_num, dim=1)
         coords = sample_coords(b, self.init_res).to(img.device) # [0, 1], shape (B x N) x (2 or 3)
         coords = coords.reshape(-1, 2)
+        if self.fused_spatial:
+            # This is the modulation coordiates
+            mod_coords = coords[:, 0].unsqueeze(dim=1)
+            # This is the concatenation coords
+            coords = coords[:, 1].unsqueeze(dim=1)
+        else:
+            mod_coords = None
 
         feat_collect = []
         modulation_s_collect = []
@@ -219,7 +233,8 @@ class HashAutoGenerator(nn.Module):
             out1, out2 = self.hash_encoder_list[i](input_coords,
                                                    None,
                                                    None,
-                                                   b=b)
+                                                   b=b,
+                                                   mod_coords=mod_coords)
             feat_collect.append(out1)
             modulation_s_collect.append(out2)
         modulation_s = torch.cat(modulation_s_collect, dim=-1) 

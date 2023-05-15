@@ -162,3 +162,16 @@ def smooth_ceiling(x, gamma=0.99):
                                     - gamma*torch.sin(2 * torch.pi * x)/(
                                     1 - gamma * torch.cos(2 * torch.pi * x))
                                 ) / torch.pi
+
+
+def pos_encoding_nerf_1d(coords: torch.Tensor, length: int):
+    """
+        Args:
+            coords: b x 1
+            length: total length
+    """
+    L = length // 2
+    multiplier = (2 ** torch.arange(L)).float().to(coords.device).reshape(1, L) * torch.pi
+    sin_part = torch.sin(multiplier * coords)
+    cos_part = torch.cos(multiplier * coords)
+    return torch.cat((sin_part, cos_part), dim=1)

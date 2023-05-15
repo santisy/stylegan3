@@ -219,6 +219,7 @@ def parse_comma_separated_list(s):
 @click.option('--expand_dim', help='Whether to expand the channel dimension',                   type=int, default=-1, show_default=True)
 @click.option('--attn_resolutions', help='Where to do attention on encoder',                    
               type=lambda x: [int(y) for y in x.split(',')] if x is not None else None, default=None, show_default=True)
+@click.option('--fused_spatial', help='Fused spatial localization y in hash and x learning.',   type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -290,7 +291,8 @@ def main(**kwargs):
                                  use_kl_reg=opts.use_kl_reg,
                                  hash_res_ratio=opts.hash_res_ratio,
                                  expand_dim=opts.expand_dim,
-                                 attn_resolutions=opts.attn_resolutions
+                                 attn_resolutions=opts.attn_resolutions,
+                                 fused_spatial=opts.fused_spatial
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)

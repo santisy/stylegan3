@@ -3,11 +3,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Function
-from torch.autograd.function import once_differentiable
 from torch.cuda.amp import custom_bwd, custom_fwd 
 from training.networks_stylegan2 import FullyConnectedLayer
 from hash_encoding.other_networks import MappingNetwork
 from hash_encoding.modules import StackedModulatedMLP
+from utils.utils import pos_encoding_nerf_1d
 
 try:
     import _gridencoder as _backend
@@ -117,6 +117,7 @@ class GridEncoder(nn.Module):
                  no_modulated_linear=False,
                  direct_coord_input=False,
                  one_hash_group=False,
+                 fused_spatial=False,
                  ):
         """
             Args:
@@ -156,6 +157,8 @@ class GridEncoder(nn.Module):
                     of internal mapping. (default: False)
                 one_hash_group (bool): Only one hash group. If so, no modulation,
                     output actual style code at the same time.
+                fused_spatial (bool): If fused spatial, we would use the additional
+                    input coordinates to modulate that.
         """
         super().__init__()
 
@@ -182,6 +185,9 @@ class GridEncoder(nn.Module):
         self.one_hash_group = one_hash_group
         self.no_modulated_linear = no_modulated_linear
         self.direct_coord_input = direct_coord_input
+        self.fused_spatial = fused_spatial
+
+
         if one_hash_group:
             style_dim = self.hash_out_dim * 2
 
@@ -197,6 +203,16 @@ class GridEncoder(nn.Module):
             self.style_mapping = FullyConnectedLayer(style_dim, s_out_dim,
                                                     activation='sigmoid',
                                                     bias_init=1)
+
+        if fused_spatial:
+            self.mini_linear4 = MappingNetwork(in_ch=32,
+                                                map_depth=2,
+                                                split_depth=1,
+                                                hidden_ch=self.hash_out_dim,
+                                                style_dim=self.hash_out_dim,
+                                                use_layer_norm=False,
+                                                two_style_code=False
+                                                )
 
         if not no_modulated_linear:
             self.mini_linear = StackedModulatedMLP(self.hash_out_dim,
@@ -260,7 +276,7 @@ class GridEncoder(nn.Module):
     def __repr__(self):
         return f"GridEncoder: input_dim={self.input_dim} num_levels={self.num_levels} level_dim={self.level_dim} resolution={self.base_resolution} -> {int(round(self.base_resolution * self.per_level_scale ** (self.num_levels - 1)))} per_level_scale={self.per_level_scale:.4f} params={tuple(self.embeddings.shape)} gridtype={self.gridtype} align_corners={self.align_corners}"
     
-    def forward(self, inputs, s=None, modulation_s=None, bound=1, b=None):
+    def forward(self, inputs, s=None, modulation_s=None, bound=1, b=None, mod_coords=None):
         """
             Args:
                 inputs: [..., input_dim], normalized real world positions in [-bound, bound]
@@ -295,6 +311,7 @@ class GridEncoder(nn.Module):
         outputs = grid_encode(inputs, self.embeddings, self.offsets, self.per_level_scale, self.base_resolution, inputs.requires_grad, self.gridtype_id, self.align_corners)
         outputs = outputs.view(prefix_shape + [self.hash_out_dim])
 
+        # This original outputs is the hash retrieve outpout before 
         outputs = outputs.reshape(b, -1, self.hash_out_dim)
 
 
@@ -308,6 +325,11 @@ class GridEncoder(nn.Module):
             outputs2 = None
             
         if not self.no_modulated_linear:
+            if self.fused_spatial:
+                beta_f, _ = self.mini_linear4(pos_encoding_nerf_1d(mod_coords, 32))
+                beta_f = beta_f.reshape(outputs.shape)
+                outputs = outputs  + beta_f
+
             outputs1 = self.mini_linear(outputs, modulation_s)
         else:
             outputs1 = outputs.reshape(-1, self.hash_out_dim)
