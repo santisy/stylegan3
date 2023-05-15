@@ -136,6 +136,9 @@ def train_diffusion(**kwargs):
     start_time = time.time()
     tick_end_time = None
 
+    if main_p_flag:
+        print("\033[92mStart training\033[00m")
+
     # Main Loop Starts Here --------------------
     while True:
         # Get data and forward
@@ -187,12 +190,12 @@ def train_diffusion(**kwargs):
             ), global_step)
 
         # Save network snapshot
-        if count % (opts.snap_k * 1000) == 0 and main_p_flag:
+        if count % (opts.snap_k * 1000) == 0:
             print(f'Save network-snapshot-{global_step}.pkl ...')
             save_file = os.path.join(run_dir, f'network-snapshot-{global_step}.pkl')
             save_snapshot_list.append(save_file)
-            trainer.save(save_file)
-            if len(save_snapshot_list) > 5:
+            trainer.save(save_file) # Here is a waiting for everyone!
+            if len(save_snapshot_list) > 5 and main_p_flag:
                 delete_file(save_snapshot_list.pop(0))
 
         # Set the barrier
