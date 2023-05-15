@@ -101,16 +101,18 @@ def train_diffusion(**kwargs):
         use_kl_reg = G.use_kl_reg
 
 
-    # Set randomness
-    np.random.seed(0)
-    torch.manual_seed(0)
-    torch.backends.cudnn.benchmark = True    # Improves training speed.
-    torch.backends.cuda.matmul.allow_tf32 = False       # Improves numerical accuracy.
-    torch.backends.cudnn.allow_tf32 = False             # Improves numerical accuracy.
-
     # Diffusion Unet Module and optimizer --------------------
     trainer = construct_imagen_trainer(G, opts, device=None, ckpt_path=opts.resume)
     G = G.to(trainer.device) # This device is coming from accelerator
+
+
+    rank_now = tdist.get_rank() if tdist.is_initialized() else 0
+    # Set randomness
+    np.random.seed(rank_now)
+    torch.manual_seed(rank_now)
+    torch.backends.cudnn.benchmark = True    # Improves training speed.
+    torch.backends.cuda.matmul.allow_tf32 = False       # Improves numerical accuracy.
+    torch.backends.cudnn.allow_tf32 = False             # Improves numerical accuracy.
 
     # ------------------------------
 
@@ -122,9 +124,10 @@ def train_diffusion(**kwargs):
                       noise_perturb=G.noise_perturb if not opts.no_noise_perturb else False,
                       noise_perturb_sigma=G.noise_perturb_sigma,
                       )
-    trainer.add_train_dataset(dataset, batch_size=opts.batch_size)
+    trainer.add_train_dataset(dataset,
+                              batch_size=opts.batch_size,
+                              shuffle=True)
     main_p_flag = trainer.accelerator.is_main_process
-    #sampler = misc.InfiniteSampler(dataset)
     #training_iter = iter(torch.utils.data.DataLoader(dataset=dataset,
     #                                                 sampler=sampler,
     #                                                 batch_size=opts.batch_size,
