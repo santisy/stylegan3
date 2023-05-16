@@ -78,7 +78,8 @@ def get_hash_mask(res_max: int, res_min: int,
 def delete_file(file_path: str):
     # TODO: More to add if we involve HDFS file system
     # Remove the local path
-    os.remove(file_path)
+    if os.path.isfile(file_path):
+        os.remove(file_path)
 
 def sample_coords(b: int, img_size: int,
                   sample_size: int=None,
