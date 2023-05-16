@@ -325,7 +325,7 @@ class GridEncoder(nn.Module):
             outputs2 = None
             
         if not self.no_modulated_linear:
-            if self.fused_spatial:
+            if getattr(self, 'fused_spatial', False):
                 beta_f, _ = self.mini_linear4(pos_encoding_nerf_1d(mod_coords, 32))
                 beta_f = beta_f.reshape(outputs.shape)
                 outputs = outputs  + beta_f
