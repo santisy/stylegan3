@@ -76,6 +76,7 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
               show_default=True)
 @click.option('--only_load_model', type=bool, default=False, show_default=True)
 @click.option('--use_ddpm', type=bool, default=False, show_default=True)
+@click.option('--use_min_snr', type=bool, default=True, show_default=True)
 
 def train_diffusion(**kwargs):
 
