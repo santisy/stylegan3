@@ -13,6 +13,8 @@ import tqdm
 
 import dnnlib
 import legacy
+import cleanfid
+from cleanfid import fid
 from diffusions.contruct_trainer import construct_imagen_trainer
 from diffusions.decode import decode_nc
 from diffusions.dpm_solver import DPM_Solver 
@@ -29,29 +31,42 @@ def _measure_and_save(out_dir: str,
                       real_dir: str,
                       data_name: str,
                       exp_name: str,
-                      eval_num: int):
+                      eval_num: int,
+                      fid_version: str='fid'):
     print(f'\033[093mEvaluation on {eval_num/1000:.2f}k image.\033[00m')
-    # Calculate
-    metric_dict = torch_fidelity.calculate_metrics(
-        input1=out_dir,
-        input2=real_dir,
-        fid=True,
-        isc=True,
-        cache_root=METRIC_ROOT,
-        cache=True,
-        input2_cache_name=f'{data_name}_stats',
-        cuda=True,
-        verbose=True,
-        samples_find_deep=True
-    )
-
-    # Results
-    with open(os.path.join(METRIC_ROOT,
-                           f'{exp_name}_metric_result.txt'),
-              'a') as f: 
-        f.write(f'{eval_num}k img evaluation results:\n')
+    f = open(os.path.join(METRIC_ROOT, f'{exp_name}_metric_result.txt'), 'a')
+    f.write(f'{eval_num}k img evaluation results:\n')
+    if fid_version == 'fid':
+        # Calculate
+        metric_dict = torch_fidelity.calculate_metrics(
+            input1=out_dir,
+            input2=real_dir,
+            fid=True,
+            isc=True,
+            prc=False,
+            cache_root=METRIC_ROOT,
+            cache=True,
+            input2_cache_name=f'{data_name}_stats',
+            cuda=True,
+            verbose=True,
+            samples_find_deep=True
+        )
+        # Results
         json.dump(metric_dict, f, ensure_ascii=False)
-        f.write('\n')
+    elif fid_version == "clip_fid":
+        score = fid.compute_fid(out_dir, dataset_name=data_name,
+                                mode="clean", model_name='clip_vit_b_32',
+                                dataset_split='custom')
+
+        f.write(f'The clip-fid score is {score:.4f}.\n')
+    elif fid_version == "kid":
+        score = fid.compute_kid(out_dir, dataset_name=data_name,
+                                mode="clean",
+                                dataset_split='custom')
+
+
+    f.write('\n')
+    f.close()
 
 
 @click.command()
@@ -81,10 +96,17 @@ def _measure_and_save(out_dir: str,
               help='Set the random seed.')
 @click.option('--save_naming_with_seed', type=bool, default=False,
               help='Save images numbering with seed increase.')
+@click.option('--which_fid',
+              type=click.Choice(['fid','kid','clip_fid'], case_sensitive=False),
+              default='fid',
+              help="Which fid to be measured.")
 def main(**kwargs):
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
 
     device = torch.device('cuda')
+
+    # Get the fid version
+    fid_version = opts.which_fid.lower()
 
     # Set seed
     torch.manual_seed(opts.seed)
@@ -96,6 +118,16 @@ def main(**kwargs):
     exp_name = opts.exp_name + f'_seed{opts.seed}'
     g_batch_size = opts.generate_batch_size
     cfg = None
+
+    # Check KID or CLIP-FID has the cache or not
+    if (fid_version == 'kid' and
+        not fid.test_stats_exists(data_name, "clean", model_name='inception_v3')):
+        fid.make_custom_stats(data_name, opts.real_data, mode="clean",
+                              model_name="inception_v3")
+    elif (fid_version == 'clip_fid' and
+        not fid.test_stats_exists(data_name, "clean", model_name='clip_vit_b_32')):
+        fid.make_custom_stats(data_name, opts.real_data, mode="clean",
+                              model_name="clip_vit_b_32")
 
     # Initial count
     if not opts.save_naming_with_seed:
@@ -122,11 +154,10 @@ def main(**kwargs):
                                                 device,
                                                 opts.network_diff_pkl,
                                                 test_flag=True)
+        # Make folders
+        os.makedirs(exported_out, exist_ok=True)
     else:
         exported_out = opts.input_folder
-
-    # Make folders
-    os.makedirs(exported_out, exist_ok=True)
 
 
     # Wrap it to DPM-solver
@@ -192,7 +223,8 @@ def main(**kwargs):
                                   opts.real_data,
                                   data_name,
                                   exp_name,
-                                  (i + 1) * g_batch_size)
+                                  (i + 1) * g_batch_size,
+                                  fid_version=fid_version)
 
 
         pbar.close()
@@ -205,7 +237,8 @@ def main(**kwargs):
                           opts.real_data,
                           data_name,
                           exp_name,
-                          total_num)
+                          total_num,
+                          fid_version=fid_version)
 
 if __name__ == '__main__':
     main()

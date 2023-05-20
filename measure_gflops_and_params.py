@@ -73,9 +73,11 @@ def count_parameters(model):
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--level_dim', type=int, default=4)
 @click.option('--out_res', type=int, default=256)
+@click.option('--feat_coord_dim_per_table', type=int, default=1)
 def calc_flops_and_params(network_pkl: str,
                           level_dim: int=4,
-                          out_res: int=256
+                          out_res: int=256,
+                          feat_coord_dim_per_table: int=1
                           ):
 
     print('Loading networks from "%s"...' % network_pkl)
@@ -112,7 +114,7 @@ def calc_flops_and_params(network_pkl: str,
 
     # Rtrieve from hash encoder
     # 1) Trieve and interpolate
-    flops += (init_res * init_res * feat_coord_dim * (8 * 2) * level_dim) 
+    flops += (init_res * init_res * feat_coord_dim //feat_coord_dim_per_table  * (2 ** feat_coord_dim_per_table * 2) * level_dim) 
     # 2) MLPs
     flops += (init_res * init_res * ((level_dim * 16) ** 2 * 2 + level_dim * 16 * init_dim // feat_coord_dim) * feat_coord_dim)
 
