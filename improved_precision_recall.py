@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 import os
-from functools import partial
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from collections import namedtuple
+from functools import partial
 from glob import glob
+import multiprocessing
+from multiprocessing import Manager, RawValue, Lock
+from multiprocessing import shared_memory
+from multiprocessing import Pool
+import time
+
 import numpy as np
 from PIL import Image
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 try:
     from tqdm import tqdm, trange
@@ -22,9 +28,9 @@ except ImportError:
         return range(x)
 
 import torch
-import torchvision.models as models
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+import torchvision.models as models
+from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
 Manifold = namedtuple('Manifold', ['features', 'radii'])
@@ -117,8 +123,20 @@ class IPR():
             raise TypeError
 
         # radii
-        distances = compute_pairwise_distances(feats)
-        radii = distances2radii(distances, k=self.k)
+        #distances = compute_pairwise_distances(feats)
+        #radii = distances2radii(distances, k=self.k)
+        a = np.zeros(feats.shape[0], dtype=feats.dtype)
+        compute_radii_from_feats = ComputeRadiiFromFeats(feats, k=self.k)
+        start_time = time.time()
+        #for i in range(feats.shape[0]):
+        #    compute_radii_from_feats(i)
+        pool = Pool(processes=16)
+        pool.map(compute_radii_from_feats, tuple(range(feats.shape[0])))
+        pool.close()
+        pool.join()
+        radii = np.asarray(list(compute_radii_from_feats.radii))
+        end_time = time.time()
+        print(f'\033[93mTotal calculating radius time:{end_time - start_time}s\033[00m')
         return Manifold(feats, radii)
 
     def extract_features(self, images):
@@ -219,6 +237,46 @@ def compute_pairwise_distances(X, Y=None):
     distances = np.sqrt(diff_square)
     return distances
 
+class ComputeMetric(object):
+    def __init__(self, mani_ref, feats):
+        self.mani_ref = mani_ref
+        self.feats_ref = mani_ref.features
+        self.feats_ref_square = np.sum(self.feats_ref ** 2, axis=1, keepdims=True)
+        self.feats = feats
+        self.feats_square = np.sum(feats ** 2, axis=1, keepdims=True)
+        self._count_list = Manager().list([0] * feats.shape[0])
+
+    @property
+    def result(self):
+        return float(sum(list(self._count_list)))
+
+    def __call__(self, i):
+        feat_now = self.feats[i][None, :]
+        dot_ = np.sum(feat_now * self.feats_ref, axis=1, keepdims=True)
+        distance = np.sqrt(self.feats_square[i][None, :] - 2 * dot_ + self.feats_ref_square)
+        distance = distance.flatten()
+        distance[distance < 0] = 0
+        self._count_list[i] += (distance < self.mani_ref.radii).any()
+
+
+class ComputeRadiiFromFeats(object):
+    def __init__(self, feats, k):
+        self.feats = feats
+        self.feats_square = np.sum(feats ** 2, axis=1, keepdims=True)
+        self.k = k
+        self._radii = Manager().list([0] * feats.shape[0])
+    
+    @property
+    def radii(self):
+        return self._radii
+
+    def __call__(self, i):
+        feat_now = self.feats[i][None, :]
+        dot_ = np.sum(feat_now * self.feats, axis=1, keepdims=True)
+        distance = np.sqrt(self.feats_square[i][None, :] - 2 * dot_ + self.feats_square)
+        distance = distance.flatten()
+        distance[distance < 0] = 0
+        self._radii[i] = get_kth_value(distance, k=self.k)
 
 def distances2radii(distances, k=3):
     num_features = distances.shape[0]
@@ -238,11 +296,16 @@ def get_kth_value(np_array, k):
 
 def compute_metric(manifold_ref, feats_subject, desc=''):
     num_subjects = feats_subject.shape[0]
-    count = 0
-    dist = compute_pairwise_distances(manifold_ref.features, feats_subject)
-    for i in trange(num_subjects, desc=desc):
-        count += (dist[:, i] < manifold_ref.radii).any()
-    return count / num_subjects
+    cm = ComputeMetric(manifold_ref, feats_subject)
+    pool = Pool(processes=16)
+    pool.map(cm, tuple(range(feats_subject.shape[0])))
+    pool.close()
+    pool.join()
+    #count = 0
+    #dist = compute_pairwise_distances(manifold_ref.features, feats_subject)
+    #for i in trange(num_subjects, desc=desc):
+    #    count += (dist[:, i] < manifold_ref.radii).any()
+    return cm.result / num_subjects
 
 
 def is_in_ball(center, radius, subject):

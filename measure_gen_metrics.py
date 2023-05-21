@@ -13,7 +13,6 @@ import tqdm
 
 import dnnlib
 import legacy
-import cleanfid
 from cleanfid import fid
 from diffusions.contruct_trainer import construct_imagen_trainer
 from diffusions.decode import decode_nc
