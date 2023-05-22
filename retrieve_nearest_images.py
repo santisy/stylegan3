@@ -24,6 +24,8 @@ from utils.simple_dataset import SimpleDataset
               type=str, required=True)
 @click.option('--outdir', help='Where to save the images', type=str,
               required=True)
+@click.option('--nearest_num', type=int, default=10)        
+@click.option('--save_in_one_folder', type=bool, default=False)
 def find_the_nearest(**kwargs):
     
     # The device
@@ -41,11 +43,15 @@ def find_the_nearest(**kwargs):
     # Construct the training dataset
     dataset = SimpleDataset(opts.dataset, device)
     data_iter = iter(dataset)
+    count = 0
 
     for input_img_path in input_img_paths:
         # Prepapre output folder
         img_name = os.path.basename(input_img_path).split('.')[0]
-        outdir_now = os.path.join(opts.outdir, img_name)
+        if not opts.save_in_one_folder:
+            outdir_now = os.path.join(opts.outdir, img_name)
+        else:
+            outdir_now = opts.outdir
         os.makedirs(outdir_now, exist_ok=True)
 
         # Prepare input generated image
@@ -66,11 +72,20 @@ def find_the_nearest(**kwargs):
         pbar.close()
 
         # Find the 10 smallest and save the image
-        shutil.copy(input_img_path, os.path.join(outdir_now, 'input.png'))
-        smallest_10_indices = np.argsort(loss_collect)[:10]
+        if not opts.save_in_one_folder:
+            shutil.copy(input_img_path, os.path.join(outdir_now, 'input.png'))
+        else:
+            shutil.copy(input_img_path, os.path.join(outdir_now, f'{count}.png'))
+            count += 1
+        smallest_10_indices = np.argsort(loss_collect)[:opts.nearest_num]
         for order, idx in enumerate(smallest_10_indices):
+            if not opts.save_in_one_folder:
+                out_name = f'order{order}_{idx:08d}.png'
+            else:
+                out_name = f'{count}.png'
             Image.fromarray(data_iter.retrieve_by_idx(idx), 'RGB').save(
-                os.path.join(outdir_now, f'order{order}_{idx:08d}.png'))
+                os.path.join(outdir_now, out_name))
+            count += 1
 
         # Reset the iterator
         data_iter = iter(dataset)

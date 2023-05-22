@@ -4,9 +4,7 @@ from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from collections import namedtuple
 from functools import partial
 from glob import glob
-import multiprocessing
-from multiprocessing import Manager, RawValue, Lock
-from multiprocessing import shared_memory
+from multiprocessing import Manager
 from multiprocessing import Pool
 import time
 
@@ -35,6 +33,8 @@ from torchvision import transforms
 
 Manifold = namedtuple('Manifold', ['features', 'radii'])
 PrecisionAndRecall = namedtuple('PrecisinoAndRecall', ['precision', 'recall'])
+
+PR_PROCESS_NUM = os.getenv('PR_PROCESS_NUM', 16)
 
 
 class IPR():
@@ -125,12 +125,11 @@ class IPR():
         # radii
         #distances = compute_pairwise_distances(feats)
         #radii = distances2radii(distances, k=self.k)
-        a = np.zeros(feats.shape[0], dtype=feats.dtype)
         compute_radii_from_feats = ComputeRadiiFromFeats(feats, k=self.k)
         start_time = time.time()
         #for i in range(feats.shape[0]):
         #    compute_radii_from_feats(i)
-        pool = Pool(processes=16)
+        pool = Pool(processes=PR_PROCESS_NUM)
         pool.map(compute_radii_from_feats, tuple(range(feats.shape[0])))
         pool.close()
         pool.join()
@@ -297,7 +296,7 @@ def get_kth_value(np_array, k):
 def compute_metric(manifold_ref, feats_subject, desc=''):
     num_subjects = feats_subject.shape[0]
     cm = ComputeMetric(manifold_ref, feats_subject)
-    pool = Pool(processes=16)
+    pool = Pool(processes=PR_PROCESS_NUM)
     pool.map(cm, tuple(range(feats_subject.shape[0])))
     pool.close()
     pool.join()
