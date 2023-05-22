@@ -71,8 +71,8 @@ class IPR():
         recall = compute_metric(manifold_subject, self.manifold_ref.features, 'computing recall...')
         return PrecisionAndRecall(precision, recall)
 
-    def compute_manifold_ref(self, path):
-        self.manifold_ref = self.compute_manifold(path)
+    def compute_manifold_ref(self, path, save_path=None):
+        self.manifold_ref = self.compute_manifold(path, save_path)
 
     def realism(self, image):
         '''
@@ -82,7 +82,7 @@ class IPR():
         feat = self.extract_features(image)
         return realism(self.manifold_ref, feat)
 
-    def compute_manifold(self, input):
+    def compute_manifold(self, input, save_path=None):
         '''
         Compute manifold of given input
         args:
@@ -90,6 +90,9 @@ class IPR():
         returns:
             Manifold(features, radii)
         '''
+        if save_path is not None and os.path.isfile(save_path):
+            input = save_path
+
         # features
         if isinstance(input, str):
             if input.endswith('.npz'):  # input is precalculated file
@@ -433,12 +436,15 @@ if __name__ == '__main__':
     # python improved_precision_recall.py [path_real] [path_fake]
     ipr = IPR(args.batch_size, args.k, args.num_samples)
     with torch.no_grad():
+        real_name = os.path.basename(args.path_real)
+        save_path = os.path.join('metrics_cache', f'{real_name}_PR_stats')
+
         # real
-        ipr.compute_manifold_ref(args.path_real)
+        ipr.compute_manifold_ref(args.path_real, save_path=save_path)
 
         # save and exit for precalc
         # python improved_precision_recall.py [path_real] [dummy_str] --fname_precalc [filename]
-        if len(args.fname_precalc) > 0:
+        if not os.path.isfile(save_path + '.npz'):
             ipr.save_ref(args.fname_precalc)
             print('path_fake (%s) is ignored for precalc' % args.path_fake)
             exit()
