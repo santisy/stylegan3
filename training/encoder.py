@@ -3,7 +3,6 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 
 __all__ = ['Encoder']
 

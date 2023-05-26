@@ -220,6 +220,8 @@ def parse_comma_separated_list(s):
 @click.option('--attn_resolutions', help='Where to do attention on encoder',                    
               type=lambda x: [int(y) for y in x.split(',')] if x is not None else None, default=None, show_default=True)
 @click.option('--fused_spatial', help='Fused spatial localization y in hash and x learning.',   type=bool, default=False, show_default=True)
+@click.option('--vq_decoder', help='Use vq gan decoder and patch gan discriminator',            type=bool, default=False, show_default=True)
+@click.option('--circular_reuse', help='Circularly reuse the key codes',                        type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -292,7 +294,9 @@ def main(**kwargs):
                                  hash_res_ratio=opts.hash_res_ratio,
                                  expand_dim=opts.expand_dim,
                                  attn_resolutions=opts.attn_resolutions,
-                                 fused_spatial=opts.fused_spatial
+                                 fused_spatial=opts.fused_spatial,
+                                 vq_decoder=opts.vq_decoder,
+                                 circular_reuse=opts.circular_reuse
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)
@@ -334,6 +338,7 @@ def main(**kwargs):
     c.loss_kwargs.l2loss_weight = opts.l2loss_weight
     c.loss_kwargs.use_kl_reg = opts.use_kl_reg
     c.loss_kwargs.kl_loss_weight = opts.kl_loss_weight
+    c.loss_kwargs.vq_decoder = opts.vq_decoder
     if opts.encoder_flag:
         c.G_kwargs.class_name = 'training.hash_autoencoder_generator.HashAutoGenerator'
     c.D_kwargs.encoder_flag = opts.encoder_flag
@@ -373,6 +378,11 @@ def main(**kwargs):
         c.G_kwargs.conv_clamp = c.D_kwargs.conv_clamp = None
     if opts.nobench:
         c.cudnn_benchmark = False
+
+    if opts.vq_decoder:
+        # Now use the default settings
+        c.D_kwargs = dnnlib.EasyDict(class_name='training.discriminator.NLayerDiscriminator')
+        c.D_reg_interval = None
 
     # Description string, fully use the given one. Other information will 
     #   be recorded in a sheet.

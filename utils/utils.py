@@ -1,5 +1,6 @@
 """Some utilities"""
 import os
+import itertools
 
 import numpy as np
 import torch
@@ -176,3 +177,9 @@ def pos_encoding_nerf_1d(coords: torch.Tensor, length: int):
     sin_part = torch.sin(multiplier * coords)
     cos_part = torch.cos(multiplier * coords)
     return torch.cat((sin_part, cos_part), dim=1)
+
+def itertools_combinations(x: np.ndarray, r: int):
+   
+    idx = np.stack(list(itertools.combinations(x, r=r)))
+
+    return x[idx]

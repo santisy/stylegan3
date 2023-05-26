@@ -1,5 +1,7 @@
 """
-    Train the diffusion on extracted neural coordinates
+    Train the diffusion on extracted key codes
+    Author: Dingdong Yang
+    Contact: dya62@sfu.ca
 """
 
 import click
@@ -129,10 +131,6 @@ def train_diffusion(**kwargs):
                               batch_size=opts.batch_size,
                               shuffle=True)
     main_p_flag = trainer.accelerator.is_main_process
-    #training_iter = iter(torch.utils.data.DataLoader(dataset=dataset,
-    #                                                 sampler=sampler,
-    #                                                 batch_size=opts.batch_size,
-    #                                                 prefetch_factor=2))
 
     # Counting initials
     count = 0
@@ -145,10 +143,7 @@ def train_diffusion(**kwargs):
 
     # Main Loop Starts Here --------------------
     while True:
-        # Get data and forward
-        # real_ni = next(training_iter)
-        # loss = trainer(real_ni, unet_number=1)
-        # trainer.update(unet_number=1)
+        # The data loader now is whitin the trainer 
         loss = trainer.train_step(unet_number = 1)
 
         # Increase couting

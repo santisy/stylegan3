@@ -4,11 +4,13 @@ from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from collections import namedtuple
 from functools import partial
 from glob import glob
+import multiprocessing
 from multiprocessing import Manager
 from multiprocessing import Pool
 import time
 
 import numpy as np
+import cupy as cp
 from PIL import Image
 
 try:
@@ -34,7 +36,7 @@ from torchvision import transforms
 Manifold = namedtuple('Manifold', ['features', 'radii'])
 PrecisionAndRecall = namedtuple('PrecisinoAndRecall', ['precision', 'recall'])
 
-PR_PROCESS_NUM = os.getenv('PR_PROCESS_NUM', 16)
+PR_PROCESS_NUM = int(os.getenv('PR_PROCESS_NUM', 16))
 
 
 class IPR():
@@ -125,18 +127,13 @@ class IPR():
             print(type(input))
             raise TypeError
 
-        # radii
-        #distances = compute_pairwise_distances(feats)
-        #radii = distances2radii(distances, k=self.k)
         compute_radii_from_feats = ComputeRadiiFromFeats(feats, k=self.k)
         start_time = time.time()
-        #for i in range(feats.shape[0]):
-        #    compute_radii_from_feats(i)
         pool = Pool(processes=PR_PROCESS_NUM)
         pool.map(compute_radii_from_feats, tuple(range(feats.shape[0])))
         pool.close()
         pool.join()
-        radii = np.asarray(list(compute_radii_from_feats.radii))
+        radii = np.asarray(list(compute_radii_from_feats.radii)).flatten()
         end_time = time.time()
         print(f'\033[93mTotal calculating radius time:{end_time - start_time}s\033[00m')
         return Manifold(feats, radii)
@@ -242,29 +239,34 @@ def compute_pairwise_distances(X, Y=None):
 class ComputeMetric(object):
     def __init__(self, mani_ref, feats):
         self.mani_ref = mani_ref
-        self.feats_ref = mani_ref.features
-        self.feats_ref_square = np.sum(self.feats_ref ** 2, axis=1, keepdims=True)
-        self.feats = feats
-        self.feats_square = np.sum(feats ** 2, axis=1, keepdims=True)
+        self.ref_radii = self._to_cuda(mani_ref.radii)
+        self.feats_ref = self._to_cuda(mani_ref.features)
+        self.feats_ref_square = cp.sum(self.feats_ref ** 2, axis=1, keepdims=True)
+        self.feats = self._to_cuda(feats)
+        self.feats_square = cp.sum(self.feats ** 2, axis=1, keepdims=True)
         self._count_list = Manager().list([0] * feats.shape[0])
 
     @property
     def result(self):
         return float(sum(list(self._count_list)))
 
+    def _to_cuda(self, x):
+        return cp.asarray(x)
+
     def __call__(self, i):
         feat_now = self.feats[i][None, :]
-        dot_ = np.sum(feat_now * self.feats_ref, axis=1, keepdims=True)
-        distance = np.sqrt(self.feats_square[i][None, :] - 2 * dot_ + self.feats_ref_square)
+        dot_ = cp.sum(feat_now * self.feats_ref, axis=1, keepdims=True)
+        distance = cp.sqrt(self.feats_square[i][None, :] - 2 * dot_ + self.feats_ref_square)
         distance = distance.flatten()
         distance[distance < 0] = 0
-        self._count_list[i] += (distance < self.mani_ref.radii).any()
+        self._count_list[i] += int((distance < self.ref_radii).any().get())
 
 
 class ComputeRadiiFromFeats(object):
     def __init__(self, feats, k):
+        feats = self._to_cuda(feats)
         self.feats = feats
-        self.feats_square = np.sum(feats ** 2, axis=1, keepdims=True)
+        self.feats_square = cp.sum(feats ** 2, axis=1, keepdims=True)
         self.k = k
         self._radii = Manager().list([0] * feats.shape[0])
     
@@ -272,10 +274,13 @@ class ComputeRadiiFromFeats(object):
     def radii(self):
         return self._radii
 
+    def _to_cuda(self, x):
+        return cp.asarray(x)
+
     def __call__(self, i):
         feat_now = self.feats[i][None, :]
-        dot_ = np.sum(feat_now * self.feats, axis=1, keepdims=True)
-        distance = np.sqrt(self.feats_square[i][None, :] - 2 * dot_ + self.feats_square)
+        dot_ = cp.sum(feat_now * self.feats, axis=1, keepdims=True)
+        distance = cp.sqrt(self.feats_square[i][None, :] - 2 * dot_ + self.feats_square)
         distance = distance.flatten()
         distance[distance < 0] = 0
         self._radii[i] = get_kth_value(distance, k=self.k)
@@ -290,23 +295,19 @@ def distances2radii(distances, k=3):
 
 def get_kth_value(np_array, k):
     kprime = k+1  # kth NN should be (k+1)th because closest one is itself
-    idx = np.argpartition(np_array, kprime)
+    idx = cp.argpartition(np_array, kprime)
     k_smallests = np_array[idx[:kprime]]
-    kth_value = k_smallests.max()
+    kth_value = k_smallests.max().get()
     return kth_value
 
 
 def compute_metric(manifold_ref, feats_subject, desc=''):
     num_subjects = feats_subject.shape[0]
     cm = ComputeMetric(manifold_ref, feats_subject)
-    pool = Pool(processes=PR_PROCESS_NUM)
+    pool = Pool(processes=PR_PROCESS_NUM // 2 + 1)
     pool.map(cm, tuple(range(feats_subject.shape[0])))
     pool.close()
     pool.join()
-    #count = 0
-    #dist = compute_pairwise_distances(manifold_ref.features, feats_subject)
-    #for i in trange(num_subjects, desc=desc):
-    #    count += (dist[:, i] < manifold_ref.radii).any()
     return cm.result / num_subjects
 
 
@@ -416,6 +417,9 @@ def toy():
 
 
 if __name__ == '__main__':
+    multiprocessing.set_start_method('spawn')
+    print(f'\033[93mThe process num is {PR_PROCESS_NUM}\033[00m.')
+
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
     parser.add_argument('path_real', type=str, help='Path to the real images')
     parser.add_argument('path_fake', type=str, help='Path to the fake images')
@@ -424,6 +428,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_samples', type=int, default=-1, help='number of samples to use')
     parser.add_argument('--toy', action='store_true')
     parser.add_argument('--fname_precalc', type=str, default='', help='fname for precalculating manifold')
+    parser.add_argument('--only_precalc', action='store_true', default=False)
     args = parser.parse_args()
 
     # toy problem
@@ -440,47 +445,16 @@ if __name__ == '__main__':
         save_path = os.path.join('metrics_cache', f'{real_name}_PR_stats')
 
         # real
-        ipr.compute_manifold_ref(args.path_real, save_path=save_path)
+        ipr.compute_manifold_ref(args.path_real, save_path=save_path + '.npz')
 
         # save and exit for precalc
-        # python improved_precision_recall.py [path_real] [dummy_str] --fname_precalc [filename]
         if not os.path.isfile(save_path + '.npz'):
-            ipr.save_ref(args.fname_precalc)
-            print('path_fake (%s) is ignored for precalc' % args.path_fake)
-            exit()
+            ipr.save_ref(save_path)
+            if args.only_precalc:
+                exit()
 
         # fake
         precision, recall = ipr.precision_and_recall(args.path_fake)
 
     print('precision:', precision)
     print('recall:', recall)
-
-    ## Example usage: realism of a real image
-    #if args.path_real.endswith('.npz'):
-    #    print('skip realism score for real image because [path_real] is .npz file')
-    #else:
-    #    dataloader = get_custom_loader(args.path_real, batch_size=args.batch_size, num_samples=1)
-    #    desc = 'found %d images in ' % len(dataloader.dataset) + args.path_real
-    #    print(desc)
-    #    first_image = iter(dataloader).next()
-    #    realism_score = ipr.realism(first_image)
-    #    print('realism of first image in real:', realism_score)
-
-    ## Example usage: realism of a fake image
-    #dataloader = get_custom_loader(args.path_fake, batch_size=args.batch_size, num_samples=1)
-    #desc = 'found %d images in ' % len(dataloader.dataset) + args.path_fake
-    #print(desc)
-    #first_image = iter(dataloader).next()
-    #realism_score = ipr.realism(first_image)
-    #print('realism of first image in fake:', realism_score)
-
-    # Example usage: on-memory case
-    # dataloader = get_custom_loader(args.path_fake,
-    #                                batch_size=args.batch_size,
-    #                                num_samples=args.num_samples)
-    # desc = 'found %d images in ' % len(dataloader.dataset) + args.path_fake
-    # images = []
-    # for batch in tqdm(dataloader, desc=desc):
-    #     images.append(batch)
-    # images = torch.cat(images, dim=0)
-    # print(ipr.precision_and_recall(images))

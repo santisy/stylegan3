@@ -1,7 +1,8 @@
 """Hash retrieve generative training"""
 
-import numpy as np
+import math
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,6 +12,7 @@ from gridencoder import GridEncoder
 from training.networks_stylegan2 import SynthesisNetworkFromHash
 from training.encoder import Encoder
 from utils.utils import sample_coords
+from utils.utils import itertools_combinations
 from utils.dist_utils import dprint
 
 __all__ = ['HashAutoGenerator']
@@ -44,6 +46,8 @@ class HashAutoGenerator(nn.Module):
                  expand_dim: int=-1,
                  attn_resolutions=None,
                  fused_spatial=False,
+                 vq_decoder=False,
+                 circular_reuse: bool=False,
                  **kwargs):
         """
             Args:
@@ -92,6 +96,9 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 fused_spatial (bool): Fused spatial. y in hash and x in modulation.
                     (default: False)
+                vq_decoder (bool): Use vq decoder? (default: False)
+                circular_reuse (bool): Circular reuse the code with 
+                    feat_coord_dim_per_table > 1.
         """
 
         super().__init__()
@@ -105,6 +112,9 @@ class HashAutoGenerator(nn.Module):
         self.use_kl_reg = use_kl_reg
         self.expand_dim = expand_dim
         self.fused_spatial = fused_spatial
+        self.vq_decoder = vq_decoder
+        self.circular_reuse = circular_reuse
+        self.feat_coord_dim_per_table = feat_coord_dim_per_table
 
         spatial_coord_dim = 2 if not fused_spatial else 1
 
@@ -118,7 +128,14 @@ class HashAutoGenerator(nn.Module):
         if expand_dim > 0:
             self.hash_encoder_num = expand_dim // feat_coord_dim_per_table
         else:
-            self.hash_encoder_num = feat_coord_dim // feat_coord_dim_per_table
+            if not circular_reuse:
+                self.hash_encoder_num = feat_coord_dim // feat_coord_dim_per_table
+            else:
+                self.hash_encoder_num = math.comb(feat_coord_dim,
+                                                  feat_coord_dim_per_table)
+                group_of_key_codes = torch.from_numpy(itertools_combinations(
+                    np.arange(feat_coord_dim), feat_coord_dim_per_table)).long()
+                self.register_buffer('group_of_key_codes', group_of_key_codes)
 
         self.img_encoder = Encoder(feat_coord_dim=feat_coord_dim,
                                    ch=32,
@@ -153,6 +170,11 @@ class HashAutoGenerator(nn.Module):
         dprint('Number of groups of hash tables is'
                f' {len(self.hash_encoder_list)}', color='g')
 
+        if vq_decoder:
+            resample_filter = None
+        else:
+            resample_filter = [1, 3, 3, 1]
+
         self.synthesis_network = SynthesisNetworkFromHash(style_dim,
                                                           res_max,
                                                           3,
@@ -160,7 +182,8 @@ class HashAutoGenerator(nn.Module):
                                                           channel_max=self.init_dim,
                                                           num_fp16_res=0,
                                                           init_res=init_res,
-                                                          additional_decoder_conv=additional_decoder_conv
+                                                          additional_decoder_conv=additional_decoder_conv,
+                                                          resample_filter=resample_filter 
                                                           )
 
         dprint('Finished building hash table generator.', color='g')
@@ -205,7 +228,10 @@ class HashAutoGenerator(nn.Module):
         # Split the coordinates
         if self.expand_dim > 0:
             feat_coords = feat_coords.repeat_interleave(self.expand_dim // self.feat_coord_dim, dim=1)
-        feat_coords_tuple = feat_coords.chunk(self.hash_encoder_num, dim=1)
+        if not self.circular_reuse:
+            feat_coords_tuple = feat_coords.chunk(self.hash_encoder_num, dim=1)
+        else:
+            feat_coords_tuple = [feat_coords[:, g_idx] for g_idx in self.group_of_key_codes]
         coords = sample_coords(b, self.init_res).to(img.device) # [0, 1], shape (B x N) x (2 or 3)
         coords = coords.reshape(-1, 2)
         if self.fused_spatial:
