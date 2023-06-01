@@ -4,28 +4,19 @@ Modules for generating hash tables
 import math
 from functools import partial
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch_utils.ops import bias_act
 from training.networks_stylegan2 import FullyConnectedLayer
-from training.networks_stylegan2 import modulated_conv2d
-from training.networks_stylegan2 import SynthesisLayer
-from training.networks_stylegan2 import Conv2dLayer
-from training.networks_stylegan2 import ToRGBLayer
 
 from hash_encoding.layers import ModulatedLinear
 from hash_encoding.layers import TokenWiseModulatedLinear
 from hash_encoding.layers import ModulatedGridLinear
 from hash_encoding.layers import ModulatedConv1d
-from hash_encoding.layers import FuseGridLinear
 from hash_retrieve_module import HashTableRetrieve
-from hash_encoding.prob_attention import ProbAttention
 from hash_encoding.other_networks import MultiHeadOffsetNetwork
 from utils.utils import get_shuffle_table_indices
-from utils.utils import render
 from utils.utils import sample_coords
 from utils.utils import hashed_positional_encodings
 from siren_pytorch import Siren

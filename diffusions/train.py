@@ -14,12 +14,10 @@ import time
 import numpy as np
 import torch
 import torch.distributed as tdist
-import torch.nn.functional as F
 sys.path.insert(0, '.')
 
 import dnnlib
 import legacy
-from torch_utils import misc
 from training.training_loop import save_image_grid
 import torchvision.utils as tvu
 
