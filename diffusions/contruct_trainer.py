@@ -3,7 +3,7 @@
 from imagen_pytorch import Unet as Unet_Imagen
 from imagen_pytorch import Imagen, ImagenTrainer
 from denoising_diffusion_pytorch import Unet as Unet_DDPM
-from denoising_diffusion_pytorch import ContinuousTimeGaussianDiffusion
+from denoising_diffusion_pytorch import GaussianDiffusion
 from diffusions.ddpm_trainer import Trainer
 
 __all__ = ['construct_imagen_trainer']
@@ -62,16 +62,16 @@ def construct_imagen_trainer(G, cfg, device=None, ckpt_path=None, test_flag=Fals
     else:
         unet = Unet_DDPM(dim=cfg.dim,
                          channels=G.feat_coord_dim,
-                         dim_mults=dim_mults,
-                         learned_sinusoidal_cond=True)
-        diffusion = ContinuousTimeGaussianDiffusion(unet,
-                                                    image_size=cfg.feat_spatial_size,
-                                                    num_sample_steps=1000,
-                                                    channels=G.feat_coord_dim,
-                                                    loss_type='l1')
-        trainer =  Trainer(diffusion,
-                           train_lr=cfg.train_lr,
-                           auto_normalize=True)
+                         dim_mults=dim_mults)
+        diffusion = GaussianDiffusion(unet,
+                                      image_size=cfg.feat_spatial_size,
+                                      num_sample_steps=1000,
+                                      channels=G.feat_coord_dim,
+                                      sampling_timesteps=250)
+        trainer = Trainer(diffusion,
+                          train_lr=cfg.train_lr,
+                          ema_decay=0.995,
+                          auto_normalize=True)
         if ckpt_path is not None:
             trainer.load(ckpt_path)
 
