@@ -222,6 +222,7 @@ def parse_comma_separated_list(s):
 @click.option('--fused_spatial', help='Fused spatial localization y in hash and x learning.',   type=bool, default=False, show_default=True)
 @click.option('--vq_decoder', help='Use vq gan decoder and patch gan discriminator',            type=bool, default=False, show_default=True)
 @click.option('--circular_reuse', help='Circularly reuse the key codes',                        type=bool, default=False, show_default=True)
+@click.option('--larger_decoder', help='Even larger decoder.',                                  type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -296,7 +297,8 @@ def main(**kwargs):
                                  attn_resolutions=opts.attn_resolutions,
                                  fused_spatial=opts.fused_spatial,
                                  vq_decoder=opts.vq_decoder,
-                                 circular_reuse=opts.circular_reuse
+                                 circular_reuse=opts.circular_reuse,
+                                 larger_decoder=opts.larger_decoder
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)

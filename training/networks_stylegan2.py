@@ -376,6 +376,7 @@ class SynthesisBlock(torch.nn.Module):
         fused_modconv_default   = True,         # Default value of fused_modconv. 'inference_only' = True for inference, False for training.
         additional_output_skip  = False,        # Additional output skip
         additional_decoder_conv = False,        # Additional decoder convolution
+        larger_decoder          = False,        # Even Larger decoder
         **layer_kwargs,                         # Arguments for SynthesisLayer.
     ):
         assert architecture in ['orig', 'skip', 'resnet']
@@ -395,6 +396,7 @@ class SynthesisBlock(torch.nn.Module):
         self.num_conv = 0
         self.num_torgb = 0
         self.additional_decoder_conv = additional_decoder_conv
+        self.larger_decoder = larger_decoder
 
         #if in_channels == 0:
         #    self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
@@ -412,6 +414,13 @@ class SynthesisBlock(torch.nn.Module):
             self.conv_ex = SynthesisLayer(out_channels, out_channels, w_dim=w_dim, resolution=resolution,
                 conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
             self.num_conv += 1
+
+        if larger_decoder:
+            self.conv_ex_1 = SynthesisLayer(out_channels, out_channels, w_dim=w_dim, resolution=resolution,
+                conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
+            self.conv_ex_2 = SynthesisLayer(out_channels, out_channels, w_dim=w_dim, resolution=resolution,
+                conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
+            self.num_conv += 2
 
         if is_last or architecture == 'skip':
             self.torgb = ToRGBLayer(out_channels, img_channels, w_dim=w_dim,
@@ -456,6 +465,12 @@ class SynthesisBlock(torch.nn.Module):
         
         if self.additional_decoder_conv:
             x = self.conv_ex(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+        
+        if self.larger_decoder:
+            y = x
+            x = self.conv_ex_1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv_ex_2(x, next(w_iter), fused_modconv=fused_modconv, gain=np.sqrt(0.5),  **layer_kwargs)
+            x = y + x
 
         # ToRGB.
         if img is not None:
@@ -547,6 +562,7 @@ class SynthesisNetworkFromHash(torch.nn.Module):
         init_res        = 64,       # Initial resolution
         additional_first_shortcut = False, # 
         additional_decoder_conv   = False,
+        larger_decoder            = False,
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
         assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
@@ -571,6 +587,7 @@ class SynthesisNetworkFromHash(torch.nn.Module):
                 img_channels=img_channels, is_last=is_last, use_fp16=use_fp16,
                 additional_output_skip=additional_first_shortcut and res==init_res,
                 additional_decoder_conv=additional_decoder_conv,
+                larger_decoder=larger_decoder,
                 **block_kwargs)
             self.num_ws += block.num_conv
             if is_last:

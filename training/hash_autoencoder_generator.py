@@ -48,6 +48,7 @@ class HashAutoGenerator(nn.Module):
                  fused_spatial=False,
                  vq_decoder=False,
                  circular_reuse: bool=False,
+                 larger_decoder: bool=False,
                  **kwargs):
         """
             Args:
@@ -99,6 +100,7 @@ class HashAutoGenerator(nn.Module):
                 vq_decoder (bool): Use vq decoder? (default: False)
                 circular_reuse (bool): Circular reuse the code with 
                     feat_coord_dim_per_table > 1.
+                larger_decoder (bool): Even larger and more complicated decoder.
         """
 
         super().__init__()
@@ -183,7 +185,8 @@ class HashAutoGenerator(nn.Module):
                                                           num_fp16_res=0,
                                                           init_res=init_res,
                                                           additional_decoder_conv=additional_decoder_conv,
-                                                          resample_filter=resample_filter 
+                                                          resample_filter=resample_filter,
+                                                          larger_decoder=larger_decoder
                                                           )
 
         dprint('Finished building hash table generator.', color='g')
