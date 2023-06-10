@@ -49,6 +49,7 @@ class HashAutoGenerator(nn.Module):
                  vq_decoder=False,
                  circular_reuse: bool=False,
                  larger_decoder: bool=False,
+                 encoder_ch: int=32,
                  **kwargs):
         """
             Args:
@@ -100,7 +101,11 @@ class HashAutoGenerator(nn.Module):
                 vq_decoder (bool): Use vq decoder? (default: False)
                 circular_reuse (bool): Circular reuse the code with 
                     feat_coord_dim_per_table > 1.
+                    (default: False)
                 larger_decoder (bool): Even larger and more complicated decoder.
+                    (default: False)
+                encoder_ch (int): encoder unit channel size
+                    (default: 32)
         """
 
         super().__init__()
@@ -140,7 +145,7 @@ class HashAutoGenerator(nn.Module):
                 self.register_buffer('group_of_key_codes', group_of_key_codes)
 
         self.img_encoder = Encoder(feat_coord_dim=feat_coord_dim,
-                                   ch=32,
+                                   ch=encoder_ch,
                                    max_ch=512,
                                    num_res_blocks=4,
                                    num_downsamples=num_downsamples,
