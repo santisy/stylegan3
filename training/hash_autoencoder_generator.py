@@ -213,8 +213,8 @@ class HashAutoGenerator(nn.Module):
                                                  attn_resolutions=None)
             self.register_buffer('const_fourier_input',
                                  pos_encodings(init_res, init_dim // 4).reshape(
-                                    1, init_res, init_res, init_dim
-                                 ))
+                                    1, init_res, init_res, init_dim).permute(0, 3, 1, 2)
+                                 )
 
         dprint('Finished building hash table generator.', color='g')
 
@@ -293,12 +293,12 @@ class HashAutoGenerator(nn.Module):
                                                    mod_coords=mod_coords)
             feat_collect.append(out1)
             modulation_s_collect.append(out2)
-        modulation_s = torch.cat(modulation_s_collect, dim=-1) 
-        modulation_s = modulation_s.unsqueeze(dim=1).repeat((1, self.synthesis_network.num_ws, 1))
         feats = torch.cat(feat_collect, dim=-1)
         feats = feats.reshape(b, self.init_res, self.init_res, self.init_dim)
         feats = feats.permute(0, 3, 1, 2)
         if not self.movq_decoder:
+            modulation_s = torch.cat(modulation_s_collect, dim=-1) 
+            modulation_s = modulation_s.unsqueeze(dim=1).repeat((1, self.synthesis_network.num_ws, 1))
             out = self.synthesis_network(modulation_s, feats)
         else:
             out = self.synthesis_network(
