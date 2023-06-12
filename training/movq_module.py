@@ -290,7 +290,7 @@ class MOVQDecoder(nn.Module):
             block = nn.ModuleList()
             attn = nn.ModuleList()
             block_out = int(ch / 2 ** i_level)
-            for _ in range(self.num_res_blocks + 1):
+            for _ in range(self.num_res_blocks):
                 block.append(
                     ResnetBlock(
                         in_channels=block_in,
@@ -335,7 +335,7 @@ class MOVQDecoder(nn.Module):
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
-            for i_block in range(self.num_res_blocks + 1):
+            for i_block in range(self.num_res_blocks):
                 h = self.up[i_level].block[i_block](h, temb, zq)
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h, zq)
