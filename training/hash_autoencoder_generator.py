@@ -53,6 +53,7 @@ class HashAutoGenerator(nn.Module):
                  larger_decoder: bool=False,
                  encoder_ch: int=32,
                  movq_decoder: bool=False,
+                 encoder_resnet_num: int=4,
                  **kwargs):
         """
             Args:
@@ -111,6 +112,8 @@ class HashAutoGenerator(nn.Module):
                     (default: 32)
                 movq_decoder (bool): MOVQ deocder or not.
                     (default: False)
+                encoder_resnet_num (int): the number of encoder blocks
+                    (default: 4)
         """
 
         super().__init__()
@@ -153,7 +156,7 @@ class HashAutoGenerator(nn.Module):
         self.img_encoder = Encoder(feat_coord_dim=feat_coord_dim,
                                    ch=encoder_ch,
                                    max_ch=512,
-                                   num_res_blocks=4,
+                                   num_res_blocks=encoder_resnet_num,
                                    num_downsamples=num_downsamples,
                                    resolution=res_max,
                                    use_kl_reg=use_kl_reg,

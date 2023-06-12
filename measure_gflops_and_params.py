@@ -108,7 +108,7 @@ def calc_flops_and_params(network_pkl: str,
           f' {encoder_parameter_count/1e6:.4f}M\033[00m')
     print('\033[93mTotal parameter memory:'
           f' {(decoder_parameter_count+hash_total_count)*4/1e9:.4f}Gb\033[00m')
-    input_dummy = torch.randn(1, 3, 256,256)
+    input_dummy = torch.randn(1, 3, 256, 256)
     flops = FlopCountAnalysis(G.img_encoder, input_dummy)
     print(f"\033[93mEncoder flops are {flops.total()/1e9}GFLops.\033[00m")
 
