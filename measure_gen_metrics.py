@@ -164,7 +164,7 @@ def main(**kwargs):
         noise_scheduler = GaussianDiffusionContinuousTimes(
             noise_schedule=cfg.get('noise_scheduler', 'cosine'),
             timesteps=1000)
-        t = torch.linspace(0, 1, 1000, device=device)
+        t = torch.linspace(1, 0, 1000 + 1, device=device)
         log_snr = noise_scheduler.log_snr(t)
         alphas, _ = log_snr_to_alpha_sigma(log_snr)
         alphas_cumprod = (alphas * alphas).detach()
@@ -194,7 +194,6 @@ def main(**kwargs):
                     sample_ni = (sample_ni + 1.0) / 2.0
                     print(sample_ni.max(), sample_ni.min())
                     sample_ni = torch.clip(sample_ni, 0, 1)
-                    import pdb; pdb.set_trace()
                 else:
                     sample_ni = diff_model.sample(batch_size=g_batch_size,
                                                   use_tqdm=False)

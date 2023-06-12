@@ -4,6 +4,8 @@ import click
 
 import legacy
 import dnnlib
+from fvcore.nn import FlopCountAnalysis
+import torch
 
 
 def conv_flops(res, in_ch, out_ch, style_dim=512, up=False):
@@ -74,10 +76,12 @@ def count_parameters(model):
 @click.option('--level_dim', type=int, default=4)
 @click.option('--out_res', type=int, default=256)
 @click.option('--feat_coord_dim_per_table', type=int, default=1)
+@click.option('--larger_decoder', type=bool, default=False)
 def calc_flops_and_params(network_pkl: str,
                           level_dim: int=4,
                           out_res: int=256,
-                          feat_coord_dim_per_table: int=1
+                          feat_coord_dim_per_table: int=1,
+                          larger_decoder: bool=False,
                           ):
 
     print('Loading networks from "%s"...' % network_pkl)
@@ -92,6 +96,7 @@ def calc_flops_and_params(network_pkl: str,
         hash_table_count += hash_encoder.embeddings.numel()
         hash_total_count += count_parameters(hash_encoder)
     decoder_parameter_count = count_parameters(G.synthesis_network)
+    encoder_parameter_count = count_parameters(G.img_encoder)
 
     print('\033[93mHash encoder total parameter counts:'
           f' {hash_total_count/1e6:.4f}M\033[00m')
@@ -99,8 +104,13 @@ def calc_flops_and_params(network_pkl: str,
           f' {hash_table_count/1e6:.4f}M\033[00m')
     print('\033[93mDecoder total parameter counts:'
           f' {decoder_parameter_count/1e6:.4f}M\033[00m')
+    print('\033[93mEncoder total parameter counts:'
+          f' {encoder_parameter_count/1e6:.4f}M\033[00m')
     print('\033[93mTotal parameter memory:'
           f' {(decoder_parameter_count+hash_total_count)*4/1e9:.4f}Gb\033[00m')
+    input_dummy = torch.randn(1, 3, 256,256)
+    flops = FlopCountAnalysis(G.img_encoder, input_dummy)
+    print(f"\033[93mEncoder flops are {flops.total()/1e9}GFLops.\033[00m")
 
     # Extract parameters
     init_res = G.init_res
@@ -121,6 +131,8 @@ def calc_flops_and_params(network_pkl: str,
     # StyleGAN synthesis layer flops
     while res_now <= out_res:
         flops += conv_flops(res_now, dim_now, dim_now, style_dim, up=False) * 2
+        if larger_decoder:
+            flops += conv_flops(res_now, dim_now, dim_now, style_dim, up=False) * 2
         if res_now != init_res:
             flops += conv_flops(res_now, dim_now, dim_now, style_dim, up=True)
         flops += torgb_flops(res_now, dim_now, style_dim)

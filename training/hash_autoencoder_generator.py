@@ -10,9 +10,11 @@ import torch.nn.functional as F
 from torch_utils import persistence
 from gridencoder import GridEncoder
 from training.networks_stylegan2 import SynthesisNetworkFromHash
+from training.movq_module import MOVQDecoder
 from training.encoder import Encoder
-from utils.utils import sample_coords
 from utils.utils import itertools_combinations
+from utils.utils import pos_encodings
+from utils.utils import sample_coords
 from utils.dist_utils import dprint
 
 __all__ = ['HashAutoGenerator']
@@ -50,6 +52,7 @@ class HashAutoGenerator(nn.Module):
                  circular_reuse: bool=False,
                  larger_decoder: bool=False,
                  encoder_ch: int=32,
+                 movq_decoder: bool=False,
                  **kwargs):
         """
             Args:
@@ -106,6 +109,8 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 encoder_ch (int): encoder unit channel size
                     (default: 32)
+                movq_decoder (bool): MOVQ deocder or not.
+                    (default: False)
         """
 
         super().__init__()
@@ -122,6 +127,7 @@ class HashAutoGenerator(nn.Module):
         self.vq_decoder = vq_decoder
         self.circular_reuse = circular_reuse
         self.feat_coord_dim_per_table = feat_coord_dim_per_table
+        self.movq_decoder = movq_decoder
 
         spatial_coord_dim = 2 if not fused_spatial else 1
 
@@ -182,17 +188,30 @@ class HashAutoGenerator(nn.Module):
         else:
             resample_filter = [1, 3, 3, 1]
 
-        self.synthesis_network = SynthesisNetworkFromHash(style_dim,
-                                                          res_max,
-                                                          3,
-                                                          channel_base=max(32768, self.init_dim * self.init_res),
-                                                          channel_max=self.init_dim,
-                                                          num_fp16_res=0,
-                                                          init_res=init_res,
-                                                          additional_decoder_conv=additional_decoder_conv,
-                                                          resample_filter=resample_filter,
-                                                          larger_decoder=larger_decoder
-                                                          )
+        if not movq_decoder:
+            self.synthesis_network = SynthesisNetworkFromHash(style_dim,
+                                                              res_max,
+                                                              3,
+                                                              channel_base=max(32768, self.init_dim * self.init_res),
+                                                              channel_max=self.init_dim,
+                                                              num_fp16_res=0,
+                                                              init_res=init_res,
+                                                              additional_decoder_conv=additional_decoder_conv,
+                                                              resample_filter=resample_filter,
+                                                              larger_decoder=larger_decoder
+                                                              )
+        else:
+            self.synthesis_network = MOVQDecoder(init_dim,
+                                                 init_dim,
+                                                 3,
+                                                 init_res,
+                                                 res_max,
+                                                 num_res_blocks=2,
+                                                 attn_resolutions=None)
+            self.register_buffer('const_fourier_input',
+                                 pos_encodings(init_res, init_dim // 4).reshape(
+                                    1, init_res, init_res, init_dim
+                                 ))
 
         dprint('Finished building hash table generator.', color='g')
 
@@ -276,7 +295,11 @@ class HashAutoGenerator(nn.Module):
         feats = torch.cat(feat_collect, dim=-1)
         feats = feats.reshape(b, self.init_res, self.init_res, self.init_dim)
         feats = feats.permute(0, 3, 1, 2)
-        out = self.synthesis_network(modulation_s, feats)
+        if not self.movq_decoder:
+            out = self.synthesis_network(modulation_s, feats)
+        else:
+            out = self.synthesis_network(
+                self.const_fourier_input.repeat(b, 1, 1, 1), feats)
         
         if not return_kl_terms:
             return out
