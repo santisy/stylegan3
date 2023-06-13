@@ -108,6 +108,28 @@ def sample_coords(b: int, img_size: int,
     return coords
 
 
+def sample_local_coords(b: int, img_size: int, local_size: int):
+    """
+        Args:
+            b (int): batch_size
+            img_size (int): image size, output size
+            local_size (int): 
+        Retrun:
+            coords (torch.Tensor): B x N x 1, value range [0, 1].
+                Combine all local coordinates to a single dimension.
+    """
+    # 2D sampling case
+    c = torch.arange(local_size) + 0.5
+    x, y = torch.meshgrid(c, c, indexing='xy')
+    # Normalize it to [0, 1]
+    coords = (x * local_size + y) / (local_size * local_size)
+    coords = coords.repeat((img_size // local_size, img_size // local_size))
+    coords = coords.reshape(1, -1, 1)
+    coords = coords.repeat((b, 1, 1))
+
+    return coords
+
+
 def pos_encodings(res: int, half_len: int):
     c = torch.arange(res) + 0.5
     x, y = torch.meshgrid(c, c, indexing='xy')

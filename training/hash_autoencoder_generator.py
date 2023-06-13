@@ -15,6 +15,7 @@ from training.encoder import Encoder
 from utils.utils import itertools_combinations
 from utils.utils import pos_encodings
 from utils.utils import sample_coords
+from utils.utils import sample_local_coords
 from utils.dist_utils import dprint
 
 __all__ = ['HashAutoGenerator']
@@ -56,6 +57,7 @@ class HashAutoGenerator(nn.Module):
                  encoder_resnet_num: int=4,
                  no_concat_coord: bool=False,
                  hash_resolution: int=-1,
+                 local_coords: bool=False,
                  **kwargs):
         """
             Args:
@@ -118,6 +120,8 @@ class HashAutoGenerator(nn.Module):
                     (default: 4)
                 no_concat_coord (bool): Do not concat coordinates
                     (default: False)
+                local_coords (bool): Local coordinates or not
+                    (default: False)
         """
 
         super().__init__()
@@ -136,10 +140,11 @@ class HashAutoGenerator(nn.Module):
         self.feat_coord_dim_per_table = feat_coord_dim_per_table
         self.movq_decoder = movq_decoder
         self.no_concat_coord = no_concat_coord
+        self.local_coords = local_coords
 
         if no_concat_coord:
             spatial_coord_dim = 0
-        elif fused_spatial:
+        elif fused_spatial or local_coords:
             spatial_coord_dim = 1
         else:
             spatial_coord_dim = 2
@@ -272,8 +277,16 @@ class HashAutoGenerator(nn.Module):
             feat_coords_tuple = feat_coords.chunk(self.hash_encoder_num, dim=1)
         else:
             feat_coords_tuple = [feat_coords[:, g_idx] for g_idx in self.group_of_key_codes]
-        coords = sample_coords(b, self.init_res).to(img.device) # [0, 1], shape (B x N) x (2 or 3)
-        coords = coords.reshape(-1, 2)
+
+        # Sample the local spatial coordinates
+        w = feat_coords.shape[2]
+        repeat_ratio = self.init_res // w
+        if not self.local_coords:
+            coords = sample_coords(b, self.init_res) # [0, 1], shape (B x N) x (2 or 3)
+        else:
+            coords = sample_local_coords(b, self.init_res, repeat_ratio) 
+        coords = coords.to(img.device).reshape(-1, 2)
+
         if self.fused_spatial:
             # This is the modulation coordiates
             mod_coords = coords[:, 0].unsqueeze(dim=1)
@@ -286,8 +299,6 @@ class HashAutoGenerator(nn.Module):
         modulation_s_collect = []
         for i in range(self.hash_encoder_num):
             feat_coords_now = feat_coords_tuple[i]
-            w = feat_coords_now.shape[2]
-            repeat_ratio = self.init_res // w
             # Repeat the spatial
             if not self.no_concat_coord:
                 feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio, dim=2)
