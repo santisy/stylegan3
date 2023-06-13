@@ -54,6 +54,7 @@ class HashAutoGenerator(nn.Module):
                  encoder_ch: int=32,
                  movq_decoder: bool=False,
                  encoder_resnet_num: int=4,
+                 hash_resolution: int=-1,
                  **kwargs):
         """
             Args:
@@ -170,7 +171,7 @@ class HashAutoGenerator(nn.Module):
                                             level_dim=level_dim,
                                             base_resolution=res_min,
                                             log2_hashmap_size=table_size_log2,
-                                            desired_resolution=init_res * hash_res_ratio,
+                                            desired_resolution=init_res * hash_res_ratio if hash_resolution < 0 else hash_resolution,
                                             feat_coord_dim=feat_coord_dim_per_table,
                                             out_dim=init_dim // self.hash_encoder_num,
                                             dummy_hash_table=dummy_hash_table,
