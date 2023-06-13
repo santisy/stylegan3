@@ -148,6 +148,7 @@ class HashAutoGenerator(nn.Module):
             spatial_coord_dim = 1
         else:
             spatial_coord_dim = 2
+        self.spatial_coord_dim = spatial_coord_dim
 
         if noise_perturb_sigma > 0:
             self.noise_perturb_sigma = noise_perturb_sigma
@@ -285,7 +286,7 @@ class HashAutoGenerator(nn.Module):
             coords = sample_coords(b, self.init_res) # [0, 1], shape (B x N) x (2 or 3)
         else:
             coords = sample_local_coords(b, self.init_res, repeat_ratio) 
-        coords = coords.to(img.device).reshape(-1, 2)
+        coords = coords.to(img.device).reshape(-1, self.spatial_coord_dim)
 
         if self.fused_spatial:
             # This is the modulation coordiates
