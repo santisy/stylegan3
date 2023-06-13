@@ -54,6 +54,7 @@ class HashAutoGenerator(nn.Module):
                  encoder_ch: int=32,
                  movq_decoder: bool=False,
                  encoder_resnet_num: int=4,
+                 no_concat_coord: bool=False,
                  **kwargs):
         """
             Args:
@@ -114,6 +115,8 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 encoder_resnet_num (int): the number of encoder blocks
                     (default: 4)
+                no_concat_coord (bool): Do not concat coordinates
+                    (default: False)
         """
 
         super().__init__()
@@ -131,8 +134,14 @@ class HashAutoGenerator(nn.Module):
         self.circular_reuse = circular_reuse
         self.feat_coord_dim_per_table = feat_coord_dim_per_table
         self.movq_decoder = movq_decoder
+        self.no_concat_coord = no_concat_coord
 
-        spatial_coord_dim = 2 if not fused_spatial else 1
+        if no_concat_coord:
+            spatial_coord_dim = 0
+        elif fused_spatial:
+            spatial_coord_dim = 1
+        else:
+            spatial_coord_dim = 2
 
         if noise_perturb_sigma > 0:
             self.noise_perturb_sigma = noise_perturb_sigma
@@ -279,12 +288,15 @@ class HashAutoGenerator(nn.Module):
             w = feat_coords_now.shape[2]
             repeat_ratio = self.init_res // w
             # Repeat the spatial
-            feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio, dim=2)
-            feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio, dim=3)
-            feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
-                                                      ).reshape(
-                                                      b*self.init_res*self.init_res, -1)
-            input_coords = torch.cat((coords, feat_coords_now), dim=1)
+            if not self.no_concat_coord:
+                feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio, dim=2)
+                feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio, dim=3)
+                feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
+                                                        ).reshape(
+                                                        b*self.init_res*self.init_res, -1)
+                input_coords = torch.cat((coords, feat_coords_now), dim=1)
+            else:
+                input_coords = feat_coords_now
 
             out1, out2 = self.hash_encoder_list[i](input_coords,
                                                    None,

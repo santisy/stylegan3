@@ -226,6 +226,7 @@ def parse_comma_separated_list(s):
 @click.option('--encoder_ch', help='Encoder unit channel number.',                              type=int, default=32, show_default=True)
 @click.option('--movq_decoder', help='Modulated VQ decoder',                                    type=bool, default=False, show_default=True)
 @click.option('--encoder_resnet_num', help='The number of resnet layers.',                      type=int, default=4, show_default=False)
+@click.option('--no_concat_coord', help='Do not concate spatial coordinates.',                  type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -304,7 +305,8 @@ def main(**kwargs):
                                  larger_decoder=opts.larger_decoder,
                                  encoder_ch=opts.encoder_ch,
                                  movq_decoder=opts.movq_decoder,
-                                 encoder_resnet_num=opts.encoder_resnet_num
+                                 encoder_resnet_num=opts.encoder_resnet_num,
+                                 no_concat_coord=opts.no_concat_coord
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)
