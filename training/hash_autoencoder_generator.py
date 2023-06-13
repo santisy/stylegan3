@@ -297,7 +297,9 @@ class HashAutoGenerator(nn.Module):
                                                         b*self.init_res*self.init_res, -1)
                 input_coords = torch.cat((coords, feat_coords_now), dim=1)
             else:
-                input_coords = feat_coords_now
+                input_coords = feat_coords_now.permute(0, 2, 3, 1
+                                                       ).reshape(
+                    -1, self.feat_coord_dim_per_table)
 
             out1, out2 = self.hash_encoder_list[i](input_coords,
                                                    None,
