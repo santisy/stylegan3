@@ -261,6 +261,7 @@ class MOVQDecoder(nn.Module):
         self.conv_in = torch.nn.Conv2d(
             z_channels, ch, kernel_size=3, stride=1, padding=1
         )
+        block_in = ch
 
         # middle
         # self.mid = nn.Module()
@@ -283,7 +284,6 @@ class MOVQDecoder(nn.Module):
         # )
 
         # upsampling
-        block_in = ch
         curr_res = res_in
         self.up = nn.ModuleList()
         for i_level in range(self.num_resolutions):

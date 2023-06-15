@@ -84,11 +84,13 @@ def delete_file(file_path: str):
 
 def sample_coords(b: int, img_size: int,
                   sample_size: int=None,
-                  single_batch: bool=False):
+                  single_batch: bool=False,
+                  combine_coords: bool=False):
     """
         Args:
             b (int): batch_size
             img_size (int): image size
+            combine_coords (bool): combine x,y coordinates to one dimension.
         Retrun:
             coords (torch.Tensor): B x N x (2 or 3), value range [0, 1]
     """
@@ -96,7 +98,10 @@ def sample_coords(b: int, img_size: int,
     c = torch.arange(img_size) + 0.5
     x, y = torch.meshgrid(c, c, indexing='xy')
     # Normalize it to [0, 1]
-    coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2) / img_size
+    if not combine_coords:
+        coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2) / img_size
+    else:
+        coords = (x * img_size + y).reshape(1, -1, 1) / (img_size * img_size)
 
     if sample_size is not None:
         sampled_indices = torch.randperm(coords.shape[1])[:sample_size]

@@ -12,6 +12,7 @@ from gridencoder import GridEncoder
 from training.networks_stylegan2 import SynthesisNetworkFromHash
 from training.movq_module import MOVQDecoder
 from training.encoder import Encoder
+from training.encoder import Decoder as VQDecoder
 from utils.utils import itertools_combinations
 from utils.utils import pos_encodings
 from utils.utils import sample_coords
@@ -58,6 +59,7 @@ class HashAutoGenerator(nn.Module):
                  no_concat_coord: bool=False,
                  hash_resolution: int=-1,
                  local_coords: bool=False,
+                 combine_coords: bool=False,
                  **kwargs):
         """
             Args:
@@ -122,6 +124,8 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 local_coords (bool): Local coordinates or not
                     (default: False)
+                combine_coords (bool): Combine x, y coordinates to 1 dimension
+                    (default: False)
         """
 
         super().__init__()
@@ -141,10 +145,11 @@ class HashAutoGenerator(nn.Module):
         self.movq_decoder = movq_decoder
         self.no_concat_coord = no_concat_coord
         self.local_coords = local_coords
+        self.combine_coords = combine_coords
 
         if no_concat_coord:
             spatial_coord_dim = 0
-        elif fused_spatial or local_coords:
+        elif fused_spatial or local_coords or combine_coords:
             spatial_coord_dim = 1
         else:
             spatial_coord_dim = 2
@@ -207,19 +212,7 @@ class HashAutoGenerator(nn.Module):
         else:
             resample_filter = [1, 3, 3, 1]
 
-        if not movq_decoder:
-            self.synthesis_network = SynthesisNetworkFromHash(style_dim,
-                                                              res_max,
-                                                              3,
-                                                              channel_base=max(32768, self.init_dim * self.init_res),
-                                                              channel_max=self.init_dim,
-                                                              num_fp16_res=0,
-                                                              init_res=init_res,
-                                                              additional_decoder_conv=additional_decoder_conv,
-                                                              resample_filter=resample_filter,
-                                                              larger_decoder=larger_decoder
-                                                              )
-        else:
+        if movq_decoder:
             self.synthesis_network = MOVQDecoder(init_dim,
                                                  init_dim,
                                                  3,
@@ -231,6 +224,22 @@ class HashAutoGenerator(nn.Module):
                                  pos_encodings(init_res, init_dim // 4).reshape(
                                     1, init_res, init_res, init_dim).permute(0, 3, 1, 2)
                                  )
+        elif vq_decoder:
+            self.synthesis_network = VQDecoder(ch=init_dim,
+                                               num_upsamples=num_downsamples,
+                                               num_res_blocks=2)
+        else:
+            self.synthesis_network = SynthesisNetworkFromHash(style_dim,
+                                                              res_max,
+                                                              3,
+                                                              channel_base=max(32768, self.init_dim * self.init_res),
+                                                              channel_max=self.init_dim,
+                                                              num_fp16_res=0,
+                                                              init_res=init_res,
+                                                              additional_decoder_conv=additional_decoder_conv,
+                                                              resample_filter=resample_filter,
+                                                              larger_decoder=larger_decoder
+                                                              )
 
         dprint('Finished building hash table generator.', color='g')
 
@@ -283,10 +292,11 @@ class HashAutoGenerator(nn.Module):
         w = feat_coords.shape[2]
         repeat_ratio = self.init_res // w
         if not self.local_coords:
-            coords = sample_coords(b, self.init_res) # [0, 1], shape (B x N) x (2 or 3)
+            coords = sample_coords(b, self.init_res, combine_coords=self.combine_coords) # [0, 1], shape (B x N) x (2 or 3)
         else:
             coords = sample_local_coords(b, self.init_res, repeat_ratio) 
-        coords = coords.to(img.device).reshape(-1, self.spatial_coord_dim)
+        if not self.no_concat_coord:
+            coords = coords.to(img.device).reshape(-1, self.spatial_coord_dim)
 
         if self.fused_spatial:
             # This is the modulation coordiates
@@ -323,13 +333,15 @@ class HashAutoGenerator(nn.Module):
         feats = torch.cat(feat_collect, dim=-1)
         feats = feats.reshape(b, self.init_res, self.init_res, self.init_dim)
         feats = feats.permute(0, 3, 1, 2)
-        if not self.movq_decoder:
+        if self.movq_decoder:
+            out = self.synthesis_network(
+                self.const_fourier_input.repeat(b, 1, 1, 1), feats)
+        elif self.vq_decoder:
+            out = self.synthesis_network(feats)
+        else:
             modulation_s = torch.cat(modulation_s_collect, dim=-1) 
             modulation_s = modulation_s.unsqueeze(dim=1).repeat((1, self.synthesis_network.num_ws, 1))
             out = self.synthesis_network(modulation_s, feats)
-        else:
-            out = self.synthesis_network(
-                self.const_fourier_input.repeat(b, 1, 1, 1), feats)
         
         if not return_kl_terms:
             return out

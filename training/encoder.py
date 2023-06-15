@@ -477,16 +477,16 @@ class Decoder(nn.Module):
         block_in = ch
 
         # middle
-        self.mid = nn.Module()
-        self.mid.block_1 = ResnetBlock(in_channels=block_in,
-                                       out_channels=block_in,
-                                       temb_channels=self.temb_ch,
-                                       dropout=dropout)
+        # self.mid = nn.Module()
+        # self.mid.block_1 = ResnetBlock(in_channels=block_in,
+        #                                out_channels=block_in,
+        #                                temb_channels=self.temb_ch,
+        #                                dropout=dropout)
         # self.mid.attn_1 = AttnBlock(block_in)
-        self.mid.block_2 = ResnetBlock(in_channels=block_in,
-                                       out_channels=block_in,
-                                       temb_channels=self.temb_ch,
-                                       dropout=dropout)
+        # self.mid.block_2 = ResnetBlock(in_channels=block_in,
+        #                                out_channels=block_in,
+        #                                temb_channels=self.temb_ch,
+        #                                dropout=dropout)
 
         # upsampling
         self.up = nn.ModuleList()
@@ -529,8 +529,8 @@ class Decoder(nn.Module):
         h = z
 
         # middle
-        h = self.mid.block_1(h, temb)
-        h = self.mid.block_2(h, temb)
+        # h = self.mid.block_1(h, temb)
+        # h = self.mid.block_2(h, temb)
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):

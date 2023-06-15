@@ -228,7 +228,8 @@ def parse_comma_separated_list(s):
 @click.option('--encoder_resnet_num', help='The number of resnet layers.',                      type=int, default=4, show_default=False)
 @click.option('--hash_resolution',    help='Force set hash table maximum resolution.',          type=int, default=-1, show_default=False)
 @click.option('--no_concat_coord', help='Do not concate spatial coordinates.',                  type=bool, default=False, show_default=True)
-@click.option('--local_coords',     help='Concat local coordinates.',                            type=bool, default=False, show_default=True)
+@click.option('--local_coords',     help='Concat local coordinates.',                           type=bool, default=False, show_default=True)
+@click.option('--combine_coords',    help='Combine spatial coordinates to one dimension.',      type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -311,6 +312,7 @@ def main(**kwargs):
                                  hash_resolution=opts.hash_resolution,
                                  no_concat_coord=opts.no_concat_coord,
                                  local_coords=opts.local_coords,
+                                 combine_coords=opts.combine_coords
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)

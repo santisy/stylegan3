@@ -17,7 +17,17 @@ from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import upfirdn2d
 from training.vgg_perceptual_loss import VGGPerceptualLoss
+from taming.modules.losses.lpips import LPIPS
 
+
+def calculate_adaptive_weight(nll_loss, g_loss, last_layer, d_weight_ori=0.5):
+    nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
+    g_grads = torch.autograd.grad(g_loss, last_layer, retain_graph=True)[0]
+
+    d_weight = torch.norm(nll_grads) / (torch.norm(g_grads) + 1e-4)
+    d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
+    d_weight = d_weight * d_weight_ori
+    return d_weight
 
 def kl_loss(mu: torch.Tensor,
             log_var: torch.Tensor,
@@ -62,6 +72,7 @@ class StyleGAN2Loss(Loss):
                  use_kl_reg=False,
                  kl_loss_weight=1e-4,
                  vq_decoder=False,
+                 disc_start=50000,
                  ):
         super().__init__()
         self.device             = device
@@ -82,8 +93,11 @@ class StyleGAN2Loss(Loss):
         self.use_kl_reg         = use_kl_reg
         self.kl_loss_weight     = kl_loss_weight
         self.vq_decoder         = vq_decoder
+        self.disc_start         = disc_start
         if encoder_flag:
             self.vgg_perceptual_loss = VGGPerceptualLoss().to(device)
+        if vq_decoder:
+            self.perceptual_loss = LPIPS().eval().to(device)
 
     def run_G(self, z, c, real_img, update_emas=False):
         ws1, ws2 = self.G.mapping(z, c, update_emas=update_emas)
@@ -127,25 +141,25 @@ class StyleGAN2Loss(Loss):
         if phase in ['Gmain', 'Gboth']:
             with torch.autograd.profiler.record_function('Gmain_forward'):
                 gen_img, kl_term = self.run_G(gen_z, gen_c, real_img)
-                if not self.vq_decoder:
-                    gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
-                    training_stats.report('Loss/scores/fake', gen_logits)
-                    training_stats.report('Loss/signs/fake', gen_logits.sign())
-                    loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
-                else:
-                    gen_logits = self.D(gen_img.contiguous())
-                    loss_Gmain = -torch.mean(gen_logits)
+                loss_Gmain = 0
 
-                training_stats.report('Loss/G/loss', loss_Gmain)
                 if self.encoder_flag:
-                    # L2 Loss
-                    loss_l2 = F.mse_loss(gen_img, real_img) * self.l2loss_weight
-                    loss_Gmain += loss_l2
-                    training_stats.report('Loss/G/l2loss', loss_l2)
-                    # VGG loss
-                    loss_vgg = self.vgg_perceptual_loss(gen_img, real_img) * 5.0
-                    loss_Gmain += loss_vgg
-                    training_stats.report('Loss/G/vggloss', loss_vgg)
+                    if not self.vq_decoder:
+                        # L2 Loss
+                        loss_l2 = F.mse_loss(gen_img, real_img) * self.l2loss_weight
+                        loss_Gmain += loss_l2
+                        training_stats.report('Loss/G/l2loss', loss_l2)
+                        # VGG loss
+                        loss_vgg = self.vgg_perceptual_loss(gen_img, real_img) * 5.0
+                        loss_Gmain += loss_vgg
+                        training_stats.report('Loss/G/vggloss', loss_vgg)
+                    else:
+
+                        loss_percep = self.perceptual_loss(
+                            ((real_img + 1) / 2.0).contiguous(),
+                            ((gen_img + 1) / 2.0).contiguous())
+                        loss_Gmain += loss_percep
+                        training_stats.report('Loss/G/loss_precep', loss_percep)
                     # KL loss
                     if self.use_kl_reg:
                         loss_kl = kl_loss(kl_term[0], kl_term[1],
@@ -153,6 +167,25 @@ class StyleGAN2Loss(Loss):
                                           kl_std=1.0)
                         loss_Gmain += loss_kl
                         training_stats.report('Loss/G/klloss', loss_kl)
+
+                if not self.vq_decoder:
+                    gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
+                    training_stats.report('Loss/scores/fake', gen_logits)
+                    training_stats.report('Loss/signs/fake', gen_logits.sign())
+                    g_loss = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
+                    loss_Gmain += g_loss
+                else:
+                    gen_logits = self.D(gen_img.contiguous())
+                    g_loss = -torch.mean(gen_logits)
+                    g_weight = calculate_adaptive_weight(torch.mean(loss_percep),
+                                                         g_loss,
+                                                         self.G.synthesis_network.conv_out.weight)
+                    if cur_nimg < self.disc_start:
+                        g_weight = 0
+                    loss_Gmain += g_loss * g_weight * 0.5
+
+                training_stats.report('Loss/G/loss', g_loss)
+                
 
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
@@ -170,7 +203,12 @@ class StyleGAN2Loss(Loss):
                 else:
                     gen_logits = self.D(gen_img.contiguous().detach())
                     real_logits = self.D(real_img.contiguous().detach())
-                    loss_Dgen = hinge_d_loss(real_logits, gen_logits)
+                    if cur_nimg < self.disc_start:
+                        d_weight = 0
+                    else:
+                        d_weight = 0.5
+                    loss_Dgen = hinge_d_loss(real_logits, gen_logits) * d_weight
+                        
                     training_stats.report('Loss/D/loss', loss_Dgen)
             with torch.autograd.profiler.record_function('Dgen_backward'):
                 loss_Dgen.mean().mul(gain).backward()
