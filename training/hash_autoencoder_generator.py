@@ -60,6 +60,7 @@ class HashAutoGenerator(nn.Module):
                  hash_resolution: int=-1,
                  local_coords: bool=False,
                  combine_coords: bool=False,
+                 exhaustive_hash_sampling: bool=False,
                  **kwargs):
         """
             Args:
@@ -126,6 +127,8 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 combine_coords (bool): Combine x, y coordinates to 1 dimension
                     (default: False)
+                exhaustive_hash_sampling (bool): Sampling at all resolutions
+                    (default: False)
         """
 
         super().__init__()
@@ -146,6 +149,8 @@ class HashAutoGenerator(nn.Module):
         self.no_concat_coord = no_concat_coord
         self.local_coords = local_coords
         self.combine_coords = combine_coords
+        self.exhaustive_hash_sampling = exhaustive_hash_sampling
+        self.num_downsamples = num_downsamples
 
         if no_concat_coord:
             spatial_coord_dim = 0
@@ -219,7 +224,8 @@ class HashAutoGenerator(nn.Module):
                                                  init_res,
                                                  res_max,
                                                  num_res_blocks=2,
-                                                 attn_resolutions=None)
+                                                 attn_resolutions=None,
+                                                 )
             self.register_buffer('const_fourier_input',
                                  pos_encodings(init_res, init_dim // 4).reshape(
                                     1, init_res, init_res, init_dim).permute(0, 3, 1, 2)
@@ -238,7 +244,9 @@ class HashAutoGenerator(nn.Module):
                                                               init_res=init_res,
                                                               additional_decoder_conv=additional_decoder_conv,
                                                               resample_filter=resample_filter,
-                                                              larger_decoder=larger_decoder
+                                                              larger_decoder=larger_decoder,
+                                                              multiple_input=exhaustive_hash_sampling,
+                                                              side_channel=self.init_dim,
                                                               )
 
         dprint('Finished building hash table generator.', color='g')
@@ -288,60 +296,78 @@ class HashAutoGenerator(nn.Module):
         else:
             feat_coords_tuple = [feat_coords[:, g_idx] for g_idx in self.group_of_key_codes]
 
-        # Sample the local spatial coordinates
+        # Original feat coords (key codes) size
         w = feat_coords.shape[2]
         repeat_ratio = self.init_res // w
-        if not self.local_coords:
-            coords = sample_coords(b, self.init_res, combine_coords=self.combine_coords) # [0, 1], shape (B x N) x (2 or 3)
+        feats = None
+        if not self.exhaustive_hash_sampling:
+            collect_round = 1
         else:
-            coords = sample_local_coords(b, self.init_res, repeat_ratio) 
-        if not self.no_concat_coord:
-            coords = coords.to(img.device).reshape(-1, self.spatial_coord_dim)
+            collect_round = self.num_downsamples + 1
 
-        if self.fused_spatial:
-            # This is the modulation coordiates
-            mod_coords = coords[:, 0].unsqueeze(dim=1)
-            # This is the concatenation coords
-            coords = coords[:, 1].unsqueeze(dim=1)
-        else:
-            mod_coords = None
+        # To collect multi-resolution features
+        feats_list = []
 
-        feat_collect = []
-        modulation_s_collect = []
-        for i in range(self.hash_encoder_num):
-            feat_coords_now = feat_coords_tuple[i]
-            # Repeat the spatial
-            if not self.no_concat_coord:
-                feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio, dim=2)
-                feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio, dim=3)
-                feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
-                                                        ).reshape(
-                                                        b*self.init_res*self.init_res, -1)
-                input_coords = torch.cat((coords, feat_coords_now), dim=1)
+        for round_i in range(collect_round):
+            res_now = int(self.init_res * 2 ** round_i)
+            repeat_ratio_now = int(repeat_ratio * 2 ** round_i)
+
+            # Sample the local spatial coordinates
+            if not self.local_coords:
+                coords = sample_coords(b, res_now, combine_coords=self.combine_coords) # [0, 1], shape (B x N) x (2 or 3)
             else:
-                input_coords = feat_coords_now.permute(0, 2, 3, 1
-                                                       ).reshape(
-                    -1, self.feat_coord_dim_per_table)
+                coords = sample_local_coords(b, res_now, repeat_ratio_now) 
+            if not self.no_concat_coord:
+                coords = coords.to(img.device).reshape(-1, self.spatial_coord_dim)
 
-            out1, out2 = self.hash_encoder_list[i](input_coords,
-                                                   None,
-                                                   None,
-                                                   b=b,
-                                                   mod_coords=mod_coords)
-            feat_collect.append(out1)
-            modulation_s_collect.append(out2)
-        feats = torch.cat(feat_collect, dim=-1)
-        feats = feats.reshape(b, self.init_res, self.init_res, self.init_dim)
-        feats = feats.permute(0, 3, 1, 2)
+            if self.fused_spatial:
+                # This is the modulation coordiates
+                mod_coords = coords[:, 0].unsqueeze(dim=1)
+                # This is the concatenation coords
+                coords = coords[:, 1].unsqueeze(dim=1)
+            else:
+                mod_coords = None
+
+            # Feature collection process --------------------
+            feat_collect = []
+            modulation_s_collect = []
+            for i in range(self.hash_encoder_num):
+                feat_coords_now = feat_coords_tuple[i]
+                # Repeat the spatial
+                if not self.no_concat_coord:
+                    feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=2)
+                    feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=3)
+                    feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
+                                                      ).reshape(
+                                            b * res_now * res_now, -1)
+                    input_coords = torch.cat((coords, feat_coords_now), dim=1)
+                else:
+                    input_coords = feat_coords_now.permute(0, 2, 3, 1
+                                                        ).reshape(
+                        -1, self.feat_coord_dim_per_table)
+
+                out1, out2 = self.hash_encoder_list[i](input_coords,
+                                                    None,
+                                                    None,
+                                                    b=b,
+                                                    mod_coords=mod_coords)
+                feat_collect.append(out1)
+                modulation_s_collect.append(out2)
+            feats = torch.cat(feat_collect, dim=-1)
+            feats = feats.reshape(b, res_now, res_now, self.init_dim)
+            feats = feats.permute(0, 3, 1, 2)
+            feats_list.append(feats)
+
+        # Forward process through decoder --------------------
         if self.movq_decoder:
             out = self.synthesis_network(
-                self.const_fourier_input.repeat(b, 1, 1, 1), feats)
+                self.const_fourier_input.repeat(b, 1, 1, 1), feats_list)
         elif self.vq_decoder:
             out = self.synthesis_network(feats)
         else:
             modulation_s = torch.cat(modulation_s_collect, dim=-1) 
             modulation_s = modulation_s.unsqueeze(dim=1).repeat((1, self.synthesis_network.num_ws, 1))
-            out = self.synthesis_network(modulation_s, feats)
+            out = self.synthesis_network(modulation_s, feats_list)
         
         if not return_kl_terms:
             return out

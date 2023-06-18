@@ -128,6 +128,7 @@ def training_loop(
     # Initialize.
     start_time = time.time()
     device = torch.device('cuda', rank)
+    torch.cuda.set_device(device)
     np.random.seed(random_seed * num_gpus + rank)
     torch.manual_seed(random_seed * num_gpus + rank)
     torch.backends.cudnn.benchmark = cudnn_benchmark    # Improves training speed.
@@ -237,6 +238,11 @@ def training_loop(
         else:
             images = torch.cat([G_ema(img=img, c=c, noise_mode='const').cpu() for img, c in zip(grid_imgs, grid_c)]).numpy()
         save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
+
+    # Temp for debug
+    print(f'\033[92mrank now {rank}\033[00m')
+    if torch.distributed.is_initialized():
+        torch.distributed.barrier()
 
     # Initialize logs.
     dprint('Initializing logs...')
@@ -394,7 +400,8 @@ def training_loop(
                 if isinstance(value, torch.nn.Module):
                     value = copy.deepcopy(value).eval().requires_grad_(False)
                     if num_gpus > 1:
-                        misc.check_ddp_consistency(value, ignore_regex=r'.*\.[^.]+_(avg|ema)')
+                        # TODO: fix the checking with running_mean and running_var
+                        #misc.check_ddp_consistency(value, ignore_regex=r'.*\.[^.]+_(avg|ema|running_mean)')
                         for param in misc.params_and_buffers(value):
                             torch.distributed.broadcast(param, src=0)
                     snapshot_data[key] = value.cpu()

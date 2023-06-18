@@ -318,7 +318,10 @@ class MOVQDecoder(nn.Module):
             block_in, out_ch, kernel_size=3, stride=1, padding=1
         )
 
-    def forward(self, z, zq):
+    def forward(self, z, zq_list):
+        if isinstance(zq_list, torch.Tensor):
+            zq_list = [zq_list,] * self.num_resolutions
+
         # assert z.shape[1:] == self.z_shape[1:]
         self.last_z_shape = z.shape
 
@@ -326,7 +329,8 @@ class MOVQDecoder(nn.Module):
         temb = None
 
         # z to block_in
-        h = self.conv_in(z)
+        # h = self.conv_in(z)
+        h = z
 
         # middle
         # h = self.mid.block_1(h, temb, zq)
@@ -334,11 +338,13 @@ class MOVQDecoder(nn.Module):
         # h = self.mid.block_2(h, temb, zq)
 
         # upsampling
+        zq_iter = iter(zq_list)
         for i_level in reversed(range(self.num_resolutions)):
+            zq_now = next(zq_iter)
             for i_block in range(self.num_res_blocks):
-                h = self.up[i_level].block[i_block](h, temb, zq)
+                h = self.up[i_level].block[i_block](h, temb, zq_now)
                 if len(self.up[i_level].attn) > 0:
-                    h = self.up[i_level].attn[i_block](h, zq)
+                    h = self.up[i_level].attn[i_block](h, zq_now)
             if i_level != 0:
                 h = self.up[i_level].upsample(h)
 
@@ -346,7 +352,7 @@ class MOVQDecoder(nn.Module):
         if self.give_pre_end:
             return h
 
-        h = self.norm_out(h, zq)
+        h = self.norm_out(h, zq_list[-1])
         h = nonlinearity(h)
         h = self.conv_out(h)
         return h

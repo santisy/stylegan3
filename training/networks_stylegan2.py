@@ -377,6 +377,8 @@ class SynthesisBlock(torch.nn.Module):
         additional_output_skip  = False,        # Additional output skip
         additional_decoder_conv = False,        # Additional decoder convolution
         larger_decoder          = False,        # Even Larger decoder
+        side_input              = False,        # Side input flag
+        side_channel            = 512,
         **layer_kwargs,                         # Arguments for SynthesisLayer.
     ):
         assert architecture in ['orig', 'skip', 'resnet']
@@ -397,6 +399,7 @@ class SynthesisBlock(torch.nn.Module):
         self.num_torgb = 0
         self.additional_decoder_conv = additional_decoder_conv
         self.larger_decoder = larger_decoder
+        self.side_input = side_input
 
         #if in_channels == 0:
         #    self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
@@ -430,8 +433,17 @@ class SynthesisBlock(torch.nn.Module):
         if in_channels != 0 and architecture == 'resnet':
             self.skip = Conv2dLayer(in_channels, out_channels, kernel_size=1, bias=False, up=2,
                 resample_filter=resample_filter, channels_last=self.channels_last)
+        
+        if side_input and in_channels != 0:
+            self.conv_side_in = SynthesisLayer(side_channel, in_channels, w_dim=w_dim, resolution=resolution,
+                conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
+            self.num_conv += 1
 
-    def forward(self, x, img, ws, force_fp32=False, fused_modconv=None, update_emas=False, **layer_kwargs):
+
+    def forward(self, x, img, ws,
+                force_fp32=False, fused_modconv=None, update_emas=False,
+                side_input=None,
+                **layer_kwargs):
         _ = update_emas # unused
         misc.assert_shape(ws, [None, self.num_conv + self.num_torgb, self.w_dim])
         w_iter = iter(ws.unbind(dim=1))
@@ -450,6 +462,9 @@ class SynthesisBlock(torch.nn.Module):
         else:
             misc.assert_shape(x, [None, self.in_channels, self.resolution // 2, self.resolution // 2])
             x = x.to(dtype=dtype, memory_format=memory_format)
+
+        if self.side_input and side_input is not None:
+            x = x + self.conv_side_in(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
         # Main layers.
         if self.in_channels == 0:
@@ -561,8 +576,10 @@ class SynthesisNetworkFromHash(torch.nn.Module):
         num_fp16_res    = 4,        # Use FP16 for the N highest resolutions.
         init_res        = 64,       # Initial resolution
         additional_first_shortcut = False, # 
-        additional_decoder_conv   = False,
-        larger_decoder            = False,
+        additional_decoder_conv   = False, # Additional convolution layer
+        larger_decoder            = False, # Additional convolution
+        multiple_input            = False, # Multiple input from hash tables
+        side_channel              = 512,
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
         assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
@@ -572,6 +589,8 @@ class SynthesisNetworkFromHash(torch.nn.Module):
         self.img_resolution_log2 = int(np.log2(img_resolution))
         self.img_channels = img_channels
         self.num_fp16_res = num_fp16_res
+        self.init_res = init_res
+        self.side_input = multiple_input
         self.block_resolutions = [2 ** i for i in range(int(np.log2(init_res)),
                                                         self.img_resolution_log2 + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
@@ -588,6 +607,8 @@ class SynthesisNetworkFromHash(torch.nn.Module):
                 additional_output_skip=additional_first_shortcut and res==init_res,
                 additional_decoder_conv=additional_decoder_conv,
                 larger_decoder=larger_decoder,
+                side_input=multiple_input,
+                side_channel=side_channel,
                 **block_kwargs)
             self.num_ws += block.num_conv
             if is_last:
@@ -606,9 +627,13 @@ class SynthesisNetworkFromHash(torch.nn.Module):
                 w_idx += block.num_conv
 
         img = None
+        if isinstance(x, list):
+            side_iter = iter(x[1:])
+            x = x[0]
         for res, cur_ws in zip(self.block_resolutions, block_ws):
             block = getattr(self, f'b{res}')
-            x, img = block(x, img, cur_ws, **block_kwargs)
+            side_input = None if not self.side_input or res == self.init_res else next(side_iter)
+            x, img = block(x, img, cur_ws, side_input=side_input, **block_kwargs)
         return img
 
     def extra_repr(self):
