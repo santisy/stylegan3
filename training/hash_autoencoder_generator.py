@@ -264,6 +264,7 @@ class HashAutoGenerator(nn.Module):
                   update_emas: bool=False,
                   sample_size: int=None,
                   return_kl_terms: bool=False,
+                  key_codes: torch.Tensor=None,
                   ) -> torch.Tensor:
         """
             Args:
@@ -273,9 +274,12 @@ class HashAutoGenerator(nn.Module):
                 linear_fuse_ration (float): If None, then we would fuse the 
                     lower level output with larger level. Fading in.
         """
-        b = img.size(0)
+        b = img.size(0) if img is not None else key_codes.size(0)
+        device = img.device if img is not None else key_codes.device
 
-        if not self.use_kl_reg:
+        if key_codes is not None:
+            feats = key_codes
+        elif not self.use_kl_reg:
             feat_coords = self.img_encoder(img) # B x F_C_C x W x H
         else:
             mu, log_var = self.img_encoder(img)
@@ -318,7 +322,7 @@ class HashAutoGenerator(nn.Module):
             else:
                 coords = sample_local_coords(b, res_now, repeat_ratio_now) 
             if not self.no_concat_coord:
-                coords = coords.to(img.device).reshape(-1, self.spatial_coord_dim)
+                coords = coords.to(device).reshape(-1, self.spatial_coord_dim)
 
             if self.fused_spatial:
                 # This is the modulation coordiates
@@ -356,6 +360,11 @@ class HashAutoGenerator(nn.Module):
             feats = torch.cat(feat_collect, dim=-1)
             feats = feats.reshape(b, res_now, res_now, self.init_dim)
             feats = feats.permute(0, 3, 1, 2)
+            #if self.local_coords:
+            #    feats = feats * pos_encodings(
+            #        feats.shape[-1], feats.shape[1] // 4).reshape(
+            #        1, feats.shape[-1], feats.shape[-1], feats.shape[1]).permute(
+            #        0, 3, 1, 2).to(device)
             feats_list.append(feats)
 
         # Forward process through decoder --------------------

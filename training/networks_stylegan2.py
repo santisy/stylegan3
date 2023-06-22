@@ -435,7 +435,7 @@ class SynthesisBlock(torch.nn.Module):
                 resample_filter=resample_filter, channels_last=self.channels_last)
         
         if side_input and in_channels != 0:
-            self.conv_side_in = SynthesisLayer(side_channel, in_channels, w_dim=w_dim, resolution=resolution,
+            self.conv_side_in = SynthesisLayer(side_channel, out_channels, w_dim=w_dim, resolution=resolution,
                 conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
             self.num_conv += 1
 
@@ -463,8 +463,6 @@ class SynthesisBlock(torch.nn.Module):
             misc.assert_shape(x, [None, self.in_channels, self.resolution // 2, self.resolution // 2])
             x = x.to(dtype=dtype, memory_format=memory_format)
 
-        if self.side_input and side_input is not None:
-            x = x + self.conv_side_in(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
         # Main layers.
         if self.in_channels == 0:
@@ -480,6 +478,12 @@ class SynthesisBlock(torch.nn.Module):
         
         if self.additional_decoder_conv:
             x = self.conv_ex(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+
+        if self.side_input and side_input is not None:
+            try:
+                x = x + self.conv_side_in(side_input, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            except:
+                import pdb; pdb.set_trace()
         
         if self.larger_decoder:
             y = x

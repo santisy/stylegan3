@@ -172,7 +172,7 @@ class StyleGAN2Loss(Loss):
                     gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
                     training_stats.report('Loss/scores/fake', gen_logits)
                     training_stats.report('Loss/signs/fake', gen_logits.sign())
-                    g_loss = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
+                    g_loss = torch.nn.functional.softplus(-gen_logits).mean() # -log(sigmoid(gen_logits))
                     loss_Gmain += g_loss
                 else:
                     gen_logits = self.D(gen_img.contiguous())
