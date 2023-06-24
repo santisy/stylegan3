@@ -61,6 +61,7 @@ class HashAutoGenerator(nn.Module):
                  local_coords: bool=False,
                  combine_coords: bool=False,
                  exhaustive_hash_sampling: bool=False,
+                 movq_stylelike: bool=False,
                  **kwargs):
         """
             Args:
@@ -128,6 +129,8 @@ class HashAutoGenerator(nn.Module):
                 combine_coords (bool): Combine x, y coordinates to 1 dimension
                     (default: False)
                 exhaustive_hash_sampling (bool): Sampling at all resolutions
+                    (default: False)
+                movq_stylelike (bool): MOVQ style-like
                     (default: False)
         """
 
@@ -218,13 +221,15 @@ class HashAutoGenerator(nn.Module):
             resample_filter = [1, 3, 3, 1]
 
         if movq_decoder:
+            devide_ratio = int(32 * 2 ** self.num_downsamples)
             self.synthesis_network = MOVQDecoder(init_dim,
-                                                 init_dim,
+                                                 init_dim // devide_ratio * devide_ratio,
                                                  3,
                                                  init_res,
                                                  res_max,
                                                  num_res_blocks=2,
                                                  attn_resolutions=None,
+                                                 movq_stylelike=movq_stylelike
                                                  )
             self.register_buffer('const_fourier_input',
                                  pos_encodings(init_res, init_dim // 4).reshape(
@@ -249,6 +254,16 @@ class HashAutoGenerator(nn.Module):
                                                               side_channel=self.init_dim,
                                                               )
 
+        if not self.exhaustive_hash_sampling:
+            self.collect_round = 1
+        else:
+            self.collect_round = self.num_downsamples + 1
+
+        self.max_repeat = int(2 ** self.num_downsamples)
+        self.max_levels = self.collect_round if not self.movq_decoder else \
+            sum(self.synthesis_network.levels_list)
+
+        dprint(f'Maximum level of coordinates is {self.max_levels}', color='y')
         dprint('Finished building hash table generator.', color='g')
 
 
@@ -304,68 +319,76 @@ class HashAutoGenerator(nn.Module):
         w = feat_coords.shape[2]
         repeat_ratio = self.init_res // w
         feats = None
-        if not self.exhaustive_hash_sampling:
-            collect_round = 1
-        else:
-            collect_round = self.num_downsamples + 1
+        collect_round = self.collect_round
 
         # To collect multi-resolution features
+        max_repeat = self.max_repeat
+        max_levels = self.max_levels
+
+        level_now = 0
         feats_list = []
 
         for round_i in range(collect_round):
             res_now = int(self.init_res * 2 ** round_i)
             repeat_ratio_now = int(repeat_ratio * 2 ** round_i)
+            level_num = 1 if not self.movq_decoder else self.synthesis_network.levels_list[round_i]
 
-            # Sample the local spatial coordinates
-            if not self.local_coords:
-                coords = sample_coords(b, res_now, combine_coords=self.combine_coords) # [0, 1], shape (B x N) x (2 or 3)
-            else:
-                coords = sample_local_coords(b, res_now, repeat_ratio_now) 
-            if not self.no_concat_coord:
-                coords = coords.to(device).reshape(-1, self.spatial_coord_dim)
-
-            if self.fused_spatial:
-                # This is the modulation coordiates
-                mod_coords = coords[:, 0].unsqueeze(dim=1)
-                # This is the concatenation coords
-                coords = coords[:, 1].unsqueeze(dim=1)
-            else:
-                mod_coords = None
-
-            # Feature collection process --------------------
-            feat_collect = []
-            modulation_s_collect = []
-            for i in range(self.hash_encoder_num):
-                feat_coords_now = feat_coords_tuple[i]
-                # Repeat the spatial
-                if not self.no_concat_coord:
-                    feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=2)
-                    feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=3)
-                    feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
-                                                      ).reshape(
-                                            b * res_now * res_now, -1)
-                    input_coords = torch.cat((coords, feat_coords_now), dim=1)
+            for _ in range(level_num):
+                # Sample the local spatial coordinates
+                if not self.local_coords:
+                    coords = sample_coords(b, res_now, combine_coords=self.combine_coords) # [0, 1], shape (B x N) x (2 or 3)
                 else:
-                    input_coords = feat_coords_now.permute(0, 2, 3, 1
-                                                        ).reshape(
-                        -1, self.feat_coord_dim_per_table)
+                    # For each level (resolution), we have different local
+                    #   coordinates.
+                    coords = sample_local_coords(b,
+                                                 img_size=res_now,
+                                                 local_size=repeat_ratio_now,
+                                                 max_local_size=max_repeat,
+                                                 max_levels=max_levels,
+                                                 level_now=level_now) 
+                if not self.no_concat_coord:
+                    coords = coords.to(device).reshape(-1, self.spatial_coord_dim)
 
-                out1, out2 = self.hash_encoder_list[i](input_coords,
-                                                    None,
-                                                    None,
-                                                    b=b,
-                                                    mod_coords=mod_coords)
-                feat_collect.append(out1)
-                modulation_s_collect.append(out2)
-            feats = torch.cat(feat_collect, dim=-1)
-            feats = feats.reshape(b, res_now, res_now, self.init_dim)
-            feats = feats.permute(0, 3, 1, 2)
-            #if self.local_coords:
-            #    feats = feats * pos_encodings(
-            #        feats.shape[-1], feats.shape[1] // 4).reshape(
-            #        1, feats.shape[-1], feats.shape[-1], feats.shape[1]).permute(
-            #        0, 3, 1, 2).to(device)
-            feats_list.append(feats)
+                if self.fused_spatial:
+                    # This is the modulation coordiates
+                    mod_coords = coords[:, 0].unsqueeze(dim=1)
+                    # This is the concatenation coords
+                    coords = coords[:, 1].unsqueeze(dim=1)
+                else:
+                    mod_coords = None
+
+                # Feature collection process --------------------
+                feat_collect = []
+                modulation_s_collect = []
+                for i in range(self.hash_encoder_num):
+                    feat_coords_now = feat_coords_tuple[i]
+                    # Repeat the spatial
+                    if not self.no_concat_coord:
+                        feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=2)
+                        feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=3)
+                        feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
+                                                        ).reshape(
+                                                b * res_now * res_now, -1)
+                        input_coords = torch.cat((coords, feat_coords_now), dim=1)
+                    else:
+                        input_coords = feat_coords_now.permute(0, 2, 3, 1
+                                                            ).reshape(
+                            -1, self.feat_coord_dim_per_table)
+
+                    out1, out2 = self.hash_encoder_list[i](input_coords,
+                                                        None,
+                                                        None,
+                                                        b=b,
+                                                        mod_coords=mod_coords)
+                    feat_collect.append(out1)
+                    modulation_s_collect.append(out2)
+                feats = torch.cat(feat_collect, dim=-1)
+                feats = feats.reshape(b, res_now, res_now, self.init_dim)
+                feats = feats.permute(0, 3, 1, 2)
+                feats_list.append(feats)
+
+                # Increase level num
+                level_now += 1
 
         # Forward process through decoder --------------------
         if self.movq_decoder:

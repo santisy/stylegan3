@@ -113,7 +113,10 @@ def sample_coords(b: int, img_size: int,
     return coords
 
 
-def sample_local_coords(b: int, img_size: int, local_size: int):
+def sample_local_coords(b: int, img_size: int, local_size: int,
+                        max_local_size: int,
+                        max_levels: int,
+                        level_now: int):
     """
         Args:
             b (int): batch_size
@@ -127,7 +130,8 @@ def sample_local_coords(b: int, img_size: int, local_size: int):
     c = torch.arange(local_size) + 0.5
     x, y = torch.meshgrid(c, c, indexing='xy')
     # Normalize it to [0, 1]
-    coords = (x * local_size + y) / (local_size * local_size)
+    coords = (x * max_local_size + y + level_now * max_local_size * max_local_size) / (
+              max_local_size * max_local_size * max_levels)
     coords = coords.repeat((img_size // local_size, img_size // local_size))
     coords = coords.reshape(1, -1, 1)
     coords = coords.repeat((b, 1, 1))

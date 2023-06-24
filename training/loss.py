@@ -157,7 +157,7 @@ class StyleGAN2Loss(Loss):
 
                         loss_percep = self.perceptual_loss(
                             ((real_img + 1) / 2.0).contiguous(),
-                            ((gen_img + 1) / 2.0).contiguous())
+                            ((gen_img + 1) / 2.0).contiguous()).mean()
                         loss_Gmain += loss_percep
                         training_stats.report('Loss/G/loss_precep', loss_percep)
                     # KL loss

@@ -476,14 +476,12 @@ class SynthesisBlock(torch.nn.Module):
             x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
             x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
         
+        if self.side_input and side_input is not None:
+            x = x + self.conv_side_in(side_input, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+
         if self.additional_decoder_conv:
             x = self.conv_ex(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
 
-        if self.side_input and side_input is not None:
-            try:
-                x = x + self.conv_side_in(side_input, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-            except:
-                import pdb; pdb.set_trace()
         
         if self.larger_decoder:
             y = x

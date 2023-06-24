@@ -3,6 +3,8 @@ import math
 import torch
 import torch.nn as nn
 import numpy as np
+import itertools as itools
+from torch_utils.ops import upfirdn2d
 
 
 def get_timestep_embedding(timesteps, embedding_dim):
@@ -82,19 +84,29 @@ def Normalize(in_channels, zq_ch, add_conv):
 
 
 class Upsample(nn.Module):
-    def __init__(self, in_channels, with_conv):
+    def __init__(self, in_channels, with_conv, mode='nearest'):
         super().__init__()
         self.with_conv = with_conv
+        self.mode = mode
         if self.with_conv:
             self.conv = torch.nn.Conv2d(
                 in_channels, in_channels, kernel_size=3, stride=1, padding=1
             )
 
     def forward(self, x):
-        x = torch.nn.functional.interpolate(x, scale_factor=2.0, mode="nearest")
+        x = torch.nn.functional.interpolate(x, scale_factor=2.0, mode=self.mode)
         if self.with_conv:
             x = self.conv(x)
         return x
+
+
+class StyleUpsample(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer('resample_filter', upfirdn2d.setup_filter([1,3,3,1]))
+
+    def forward(self, x):
+        return upfirdn2d.upfirdn2d(x, f=self.resample_filter, up=2, padding=[2, 1, 2, 1])
 
 
 class Downsample(nn.Module):
@@ -241,6 +253,7 @@ class MOVQDecoder(nn.Module):
         give_pre_end=False,
         #zq_ch=None,
         add_conv=False,
+        movq_stylelike=False,
         **ignorekwargs
     ):
         super().__init__()
@@ -249,12 +262,8 @@ class MOVQDecoder(nn.Module):
         self.num_res_blocks = num_res_blocks
         self.resolution = resolution
         self.give_pre_end = give_pre_end
+        self.movq_stylelike = movq_stylelike
 
-        # compute in_ch_mult, block_in and curr_res at lowest res
-        # in_ch_mult = (1,) + tuple(ch_mult)
-        #block_in = ch * ch_mult[self.num_resolutions - 1]
-        #curr_res = resolution // 2 ** (self.num_resolutions - 1)
-        #self.z_shape = (1, z_channels, curr_res, curr_res)
         self.z_shape = (1, z_channels, res_in, res_in)
 
         # z to block_in
@@ -262,26 +271,28 @@ class MOVQDecoder(nn.Module):
             z_channels, ch, kernel_size=3, stride=1, padding=1
         )
         block_in = ch
+        self.levels_list = [0,] * self.num_resolutions
 
         # middle
-        # self.mid = nn.Module()
-        # self.mid.block_1 = ResnetBlock(
-        #     in_channels=block_in,
-        #     out_channels=block_in,
-        #     temb_channels=self.temb_ch,
-        #     dropout=dropout,
-        #     zq_ch=zq_ch,
-        #     add_conv=add_conv,
-        # )
-        # self.mid.attn_1 = AttnBlock(block_in, zq_ch, add_conv=add_conv)
-        # self.mid.block_2 = ResnetBlock(
-        #     in_channels=block_in,
-        #     out_channels=block_in,
-        #     temb_channels=self.temb_ch,
-        #     dropout=dropout,
-        #     zq_ch=zq_ch,
-        #     add_conv=add_conv,
-        # )
+        self.mid = nn.Module()
+        self.mid.block_1 = ResnetBlock(
+            in_channels=block_in,
+            out_channels=block_in,
+            temb_channels=self.temb_ch,
+            dropout=dropout,
+            zq_ch=z_channels,
+            add_conv=add_conv,
+        )
+        self.mid.attn_1 = AttnBlock(block_in, z_channels, add_conv=add_conv)
+        self.mid.block_2 = ResnetBlock(
+            in_channels=block_in,
+            out_channels=block_in,
+            temb_channels=self.temb_ch,
+            dropout=dropout,
+            zq_ch=z_channels,
+            add_conv=add_conv,
+        )
+        self.levels_list[0] += 1
 
         # upsampling
         curr_res = res_in
@@ -307,6 +318,8 @@ class MOVQDecoder(nn.Module):
             up = nn.Module()
             up.block = block
             up.attn = attn
+            # For each res blocks there are 2 spatial normalization there
+            self.levels_list[i_level] += self.num_res_blocks
             if i_level != self.num_resolutions - 1:
                 up.upsample = Upsample(block_in, resamp_with_conv)
                 curr_res = curr_res * 2
@@ -317,6 +330,7 @@ class MOVQDecoder(nn.Module):
         self.conv_out = torch.nn.Conv2d(
             block_in, out_ch, kernel_size=3, stride=1, padding=1
         )
+        self.levels_list[-1] += 1
 
     def forward(self, z, zq_list):
         if isinstance(zq_list, torch.Tensor):
@@ -329,22 +343,22 @@ class MOVQDecoder(nn.Module):
         temb = None
 
         # z to block_in
-        # h = self.conv_in(z)
-        h = z
+        h = self.conv_in(z)
+        #h = z
+        zq_iter = iter(zq_list)
 
         # middle
-        # h = self.mid.block_1(h, temb, zq)
-        # h = self.mid.attn_1(h, zq)
-        # h = self.mid.block_2(h, temb, zq)
+        z_mid = next(zq_iter)
+        h = self.mid.block_1(h, temb, z_mid)
+        h = self.mid.attn_1(h, z_mid)
+        h = self.mid.block_2(h, temb, z_mid)
 
         # upsampling
-        zq_iter = iter(zq_list)
         for i_level in reversed(range(self.num_resolutions)):
-            zq_now = next(zq_iter)
             for i_block in range(self.num_res_blocks):
-                h = self.up[i_level].block[i_block](h, temb, zq_now)
+                h = self.up[i_level].block[i_block](h, temb, next(zq_iter))
                 if len(self.up[i_level].attn) > 0:
-                    h = self.up[i_level].attn[i_block](h, zq_now)
+                    h = self.up[i_level].attn[i_block](h, next(zq_iter))
             if i_level != 0:
                 h = self.up[i_level].upsample(h)
 
@@ -352,7 +366,7 @@ class MOVQDecoder(nn.Module):
         if self.give_pre_end:
             return h
 
-        h = self.norm_out(h, zq_list[-1])
+        h = self.norm_out(h, next(zq_iter))
         h = nonlinearity(h)
         h = self.conv_out(h)
         return h
