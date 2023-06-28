@@ -154,11 +154,11 @@ class StyleGAN2Loss(Loss):
                         loss_Gmain += loss_vgg
                         training_stats.report('Loss/G/vggloss', loss_vgg)
                     else:
-
+                        rec_loss = torch.abs(real_img.contiguous() - gen_img.contiguous()).mean()
                         loss_percep = self.perceptual_loss(
                             ((real_img + 1) / 2.0).contiguous(),
                             ((gen_img + 1) / 2.0).contiguous()).mean()
-                        loss_Gmain += loss_percep
+                        loss_Gmain += (loss_percep + rec_loss)
                         training_stats.report('Loss/G/loss_precep', loss_percep)
                     # KL loss
                     if self.use_kl_reg:
@@ -183,6 +183,7 @@ class StyleGAN2Loss(Loss):
                     if cur_nimg < self.disc_start:
                         g_weight = 0
                     loss_Gmain += g_loss * g_weight * 0.5
+                    training_stats.report('Loss/G/g_weight', g_weight)
 
                 training_stats.report('Loss/G/loss', g_loss)
                 

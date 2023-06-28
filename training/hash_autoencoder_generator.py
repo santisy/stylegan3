@@ -17,6 +17,7 @@ from utils.utils import itertools_combinations
 from utils.utils import pos_encodings
 from utils.utils import sample_coords
 from utils.utils import sample_local_coords
+from utils.utils import unfold_k_with_padding
 from utils.dist_utils import dprint
 
 __all__ = ['HashAutoGenerator']
@@ -62,6 +63,7 @@ class HashAutoGenerator(nn.Module):
                  combine_coords: bool=False,
                  exhaustive_hash_sampling: bool=False,
                  movq_stylelike: bool=False,
+                 unfold_k: int=-1,
                  **kwargs):
         """
             Args:
@@ -132,6 +134,7 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 movq_stylelike (bool): MOVQ style-like
                     (default: False)
+                unfold_k (int): Unfold local coordinates number
         """
 
         super().__init__()
@@ -149,13 +152,15 @@ class HashAutoGenerator(nn.Module):
         self.circular_reuse = circular_reuse
         self.feat_coord_dim_per_table = feat_coord_dim_per_table
         self.movq_decoder = movq_decoder
-        self.no_concat_coord = no_concat_coord
+        self.no_concat_coord = no_concat_coord if unfold_k <= 1 else True
         self.local_coords = local_coords
         self.combine_coords = combine_coords
         self.exhaustive_hash_sampling = exhaustive_hash_sampling
         self.num_downsamples = num_downsamples
+        self.unfold_k = unfold_k
+        assert unfold_k >= 1
 
-        if no_concat_coord:
+        if no_concat_coord or unfold_k > 1:
             spatial_coord_dim = 0
         elif fused_spatial or local_coords or combine_coords:
             spatial_coord_dim = 1
@@ -194,7 +199,7 @@ class HashAutoGenerator(nn.Module):
 
         self.hash_encoder_list = nn.ModuleList()
         for _ in range(self.hash_encoder_num):
-            self.hash_encoder_list.append(GridEncoder(input_dim=feat_coord_dim_per_table + spatial_coord_dim,
+            self.hash_encoder_list.append(GridEncoder(input_dim=int(feat_coord_dim_per_table * unfold_k + spatial_coord_dim),
                                             num_levels=table_num,
                                             level_dim=level_dim,
                                             base_resolution=res_min,
@@ -335,27 +340,30 @@ class HashAutoGenerator(nn.Module):
 
             for _ in range(level_num):
                 # Sample the local spatial coordinates
-                if not self.local_coords:
-                    coords = sample_coords(b, res_now, combine_coords=self.combine_coords) # [0, 1], shape (B x N) x (2 or 3)
-                else:
-                    # For each level (resolution), we have different local
-                    #   coordinates.
-                    coords = sample_local_coords(b,
-                                                 img_size=res_now,
-                                                 local_size=repeat_ratio_now,
-                                                 max_local_size=max_repeat,
-                                                 max_levels=max_levels,
-                                                 level_now=level_now) 
                 if not self.no_concat_coord:
+                    if not self.local_coords:
+                        coords = sample_coords(b, res_now, combine_coords=self.combine_coords) # [0, 1], shape (B x N) x (2 or 3)
+                    else:
+                        # For each level (resolution), we have different local
+                        #   coordinates.
+                        coords = sample_local_coords(b,
+                                                    img_size=res_now,
+                                                    local_size=repeat_ratio_now,
+                                                    max_local_size=max_repeat,
+                                                    max_levels=max_levels,
+                                                    level_now=level_now) 
                     coords = coords.to(device).reshape(-1, self.spatial_coord_dim)
 
-                if self.fused_spatial:
-                    # This is the modulation coordiates
-                    mod_coords = coords[:, 0].unsqueeze(dim=1)
-                    # This is the concatenation coords
-                    coords = coords[:, 1].unsqueeze(dim=1)
+                    if self.fused_spatial:
+                        # This is the modulation coordiates
+                        mod_coords = coords[:, 0].unsqueeze(dim=1)
+                        # This is the concatenation coords
+                        coords = coords[:, 1].unsqueeze(dim=1)
+                    else:
+                        mod_coords = None
                 else:
                     mod_coords = None
+                    coords = None
 
                 # Feature collection process --------------------
                 feat_collect = []
@@ -363,25 +371,44 @@ class HashAutoGenerator(nn.Module):
                 for i in range(self.hash_encoder_num):
                     feat_coords_now = feat_coords_tuple[i]
                     # Repeat the spatial
-                    if not self.no_concat_coord:
-                        feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=2)
-                        feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=3)
-                        feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
-                                                        ).reshape(
-                                                b * res_now * res_now, -1)
-                        input_coords = torch.cat((coords, feat_coords_now), dim=1)
-                    else:
-                        input_coords = feat_coords_now.permute(0, 2, 3, 1
+                    if self.unfold_k == 1:
+                        if not self.no_concat_coord:
+                            feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=2)
+                            feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=3)
+                            feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
                                                             ).reshape(
-                            -1, self.feat_coord_dim_per_table)
+                                                    b * res_now * res_now, -1)
+                            input_coords = torch.cat((coords, feat_coords_now), dim=1)
+                        else:
+                            input_coords = feat_coords_now.permute(0, 2, 3, 1
+                                                                ).reshape(
+                                -1, self.feat_coord_dim_per_table)
 
-                    out1, out2 = self.hash_encoder_list[i](input_coords,
-                                                        None,
-                                                        None,
-                                                        b=b,
-                                                        mod_coords=mod_coords)
+                        out1, out2 = self.hash_encoder_list[i](input_coords,
+                                                            None,
+                                                            None,
+                                                            b=b,
+                                                            mod_coords=mod_coords)
+                    elif self.unfold_k > 1:
+                        out1 = 0
+                        out2 = 0
+
+                        feats_unfold = unfold_k_with_padding(feat_coords_now, self.unfold_k)
+                        for feat_coord_ in feats_unfold:
+                            out1_, out2_ = self.hash_encoder_list[i](
+                                                                feat_coord_,
+                                                                None,
+                                                                None,
+                                                                b=b,
+                                                                mod_coords=mod_coords)
+                            out1 += out1_
+                            out2 += out2_
+                        out1 = out1 / math.sqrt(2.0)
+                        out2 = out2 / math.sqrt(2.0)
+
                     feat_collect.append(out1)
                     modulation_s_collect.append(out2)
+
                 feats = torch.cat(feat_collect, dim=-1)
                 feats = feats.reshape(b, res_now, res_now, self.init_dim)
                 feats = feats.permute(0, 3, 1, 2)

@@ -2,6 +2,7 @@
 import os
 import itertools
 
+import math
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -214,3 +215,16 @@ def itertools_combinations(x: np.ndarray, r: int):
     idx = np.stack(list(itertools.combinations(x, r=r)))
 
     return x[idx]
+
+def unfold_k_with_padding(x, k, dilation=1, stride=1):
+    coord_dim = int(x.shape[1] * k)
+    x_unfold1 = F.unfold(F.pad(x, (int(math.floor(k/2)), int(math.ceil(k/2-1.0)), 0, 0)),
+                         (1, k), dilation, 0, stride).permute(0, 2, 1).reshape(-1, coord_dim)
+    #x_unfold2 = F.unfold(F.pad(x, (int(math.ceil(k/2 - 1.0)), int(math.floor(k/2)), 0, 0)),
+    #                     (1, k), dilation, 0, stride).permute(0, 2, 1).reshape(-1, coord_dim)
+    x_unfold3 = F.unfold(F.pad(x, (0, 0, int(math.floor(k/2)), int(math.ceil(k/2-1.0)))),
+                         (k, 1), dilation, 0, stride).permute(0, 2, 1).reshape(-1, coord_dim)
+    #x_unfold4 = F.unfold(F.pad(x, (0, 0, int(math.ceil(k/2-1.0)), int(math.floor(k/2)))),
+    #                     (k, 1), dilation, 0, stride).permute(0, 2, 1).reshape(-1, coord_dim)
+
+    return x_unfold1, x_unfold3

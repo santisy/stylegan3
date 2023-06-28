@@ -232,6 +232,7 @@ def parse_comma_separated_list(s):
 @click.option('--combine_coords',    help='Combine spatial coordinates to one dimension.',      type=bool, default=False, show_default=True)
 @click.option('--exhaustive_hash_sampling', help='Sampling all resolutions',                    type=bool, default=False, show_default=True)
 @click.option('--movq_stylelike',    help='Make movq decoder more like stylegan',               type=bool, default=False, show_default=True)
+@click.option('--unfold_k',      help='Unfold local keycodes jointly learn features',           type=int, default=1, show_default=True)
 
 
 def main(**kwargs):
@@ -316,7 +317,8 @@ def main(**kwargs):
                                  local_coords=opts.local_coords,
                                  combine_coords=opts.combine_coords,
                                  exhaustive_hash_sampling=opts.exhaustive_hash_sampling,
-                                 movq_stylelike=opts.movq_stylelike
+                                 movq_stylelike=opts.movq_stylelike,
+                                 unfold_k=opts.unfold_k,
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)
@@ -369,8 +371,8 @@ def main(**kwargs):
         raise click.ClickException('--batch must be a multiple of --gpus')
     if c.batch_size % (c.num_gpus * c.batch_gpu) != 0:
         raise click.ClickException('--batch must be a multiple of --gpus times --batch-gpu')
-    if c.batch_gpu < c.D_kwargs.epilogue_kwargs.mbstd_group_size:
-        raise click.ClickException('--batch-gpu cannot be smaller than --mbstd')
+    #if c.batch_gpu < c.D_kwargs.epilogue_kwargs.mbstd_group_size:
+    #    raise click.ClickException('--batch-gpu cannot be smaller than --mbstd')
     if any(not metric_main.is_valid_metric(metric) for metric in c.metrics):
         raise click.ClickException('\n'.join(['--metrics can only contain the following values:'] + metric_main.list_valid_metrics()))
 
