@@ -129,7 +129,8 @@ class StyleGAN2Loss(Loss):
         logits = self.D(img, c, update_emas=update_emas)
         return logits
 
-    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, gain, cur_nimg):
+    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, gain,
+                             cur_nimg, cur_tick):
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
         if self.pl_weight == 0:
             phase = {'Greg': 'none', 'Gboth': 'Gmain'}.get(phase, phase)
@@ -180,9 +181,9 @@ class StyleGAN2Loss(Loss):
                     g_weight = calculate_adaptive_weight(torch.mean(loss_percep),
                                                          g_loss,
                                                          self.G.synthesis_network.conv_out.weight)
-                    if cur_nimg < self.disc_start:
+                    if cur_tick < self.disc_start:
                         g_weight = 0
-                    loss_Gmain += g_loss * g_weight * 0.5
+                    loss_Gmain += g_loss * g_weight
                     training_stats.report('Loss/G/g_weight', g_weight)
 
                 training_stats.report('Loss/G/loss', g_loss)
@@ -204,11 +205,11 @@ class StyleGAN2Loss(Loss):
                 else:
                     gen_logits = self.D(gen_img.contiguous().detach())
                     real_logits = self.D(real_img.contiguous().detach())
-                    if cur_nimg < self.disc_start:
-                        d_weight = 0
+                    if cur_tick < self.disc_start:
+                        dis_factor = 0
                     else:
-                        d_weight = 0.5
-                    loss_Dgen = hinge_d_loss(real_logits, gen_logits) * d_weight
+                        dis_factor = 1.0
+                    loss_Dgen = hinge_d_loss(real_logits, gen_logits) * dis_factor
                         
                     training_stats.report('Loss/D/loss', loss_Dgen)
             with torch.autograd.profiler.record_function('Dgen_backward'):

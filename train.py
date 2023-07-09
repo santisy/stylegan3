@@ -225,7 +225,7 @@ def parse_comma_separated_list(s):
 @click.option('--larger_decoder', help='Even larger decoder.',                                  type=bool, default=False, show_default=True)
 @click.option('--encoder_ch', help='Encoder unit channel number.',                              type=int, default=32, show_default=True)
 @click.option('--movq_decoder', help='Modulated VQ decoder',                                    type=bool, default=False, show_default=True)
-@click.option('--encoder_resnet_num', help='The number of resnet layers.',                      type=int, default=4, show_default=False)
+@click.option('--encoder_resnet_num', help='The number of resnet layers.',                      type=int, default=2, show_default=False)
 @click.option('--hash_resolution',    help='Force set hash table maximum resolution.',          type=int, default=-1, show_default=False)
 @click.option('--no_concat_coord', help='Do not concate spatial coordinates.',                  type=bool, default=False, show_default=True)
 @click.option('--local_coords',     help='Concat local coordinates.',                           type=bool, default=False, show_default=True)
@@ -233,6 +233,11 @@ def parse_comma_separated_list(s):
 @click.option('--exhaustive_hash_sampling', help='Sampling all resolutions',                    type=bool, default=False, show_default=True)
 @click.option('--movq_stylelike',    help='Make movq decoder more like stylegan',               type=bool, default=False, show_default=True)
 @click.option('--unfold_k',      help='Unfold local keycodes jointly learn features',           type=int, default=1, show_default=True)
+@click.option('--no_atten_decoder', help='No attnetion decoder.',                               type=bool, default=True, show_default=True)
+@click.option('--decoder_ch',   help='Decoder unit channel size',                               type=int, default=128, show_default=True)
+@click.option('--decoder_ch_mult', help='The mulitplication factor of decoder',                    
+              type=lambda x: [int(y) for y in x.split(',')] if x is not None else None, default='1,2,4,4', show_default=True)
+@click.option('--dual_connection', help='Key codes also connect to the features.',              type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -319,6 +324,10 @@ def main(**kwargs):
                                  exhaustive_hash_sampling=opts.exhaustive_hash_sampling,
                                  movq_stylelike=opts.movq_stylelike,
                                  unfold_k=opts.unfold_k,
+                                 no_atten_decoder=opts.no_atten_decoder,
+                                 decoder_ch=opts.decoder_ch,
+                                 decoder_ch_mult=opts.decoder_ch_mult,
+                                 dual_connection=opts.dual_connection
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)

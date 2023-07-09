@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from torch_utils import persistence
 from gridencoder import GridEncoder
 from training.networks_stylegan2 import SynthesisNetworkFromHash
+from training.networks_stylegan2 import SynthesisLayer
 from training.movq_module import MOVQDecoder
 from training.encoder import Encoder
 from training.encoder import Decoder as VQDecoder
@@ -64,6 +65,10 @@ class HashAutoGenerator(nn.Module):
                  exhaustive_hash_sampling: bool=False,
                  movq_stylelike: bool=False,
                  unfold_k: int=-1,
+                 no_atten_decoder: bool=False,
+                 decoder_ch: int=128,
+                 decoder_ch_mult=[1,2,4,4],
+                 dual_connection: bool=False,
                  **kwargs):
         """
             Args:
@@ -135,6 +140,15 @@ class HashAutoGenerator(nn.Module):
                 movq_stylelike (bool): MOVQ style-like
                     (default: False)
                 unfold_k (int): Unfold local coordinates number
+                    (default: -1)
+                no_atten_decoder (bool): No attention layer in the decoder
+                    (default: False)
+                decoder_ch: Decoder unit channel size
+                    (default: 128)
+                decoder_ch_mult: Decoder channel multplication factor
+                    (default: [1, 2, 4, 4])
+                dual_connection: Dual connection to the key codes.
+                    (default: False)
         """
 
         super().__init__()
@@ -158,6 +172,7 @@ class HashAutoGenerator(nn.Module):
         self.exhaustive_hash_sampling = exhaustive_hash_sampling
         self.num_downsamples = num_downsamples
         self.unfold_k = unfold_k
+        self.dual_connection = dual_connection
         assert unfold_k >= 1
 
         if no_concat_coord or unfold_k > 1:
@@ -226,15 +241,16 @@ class HashAutoGenerator(nn.Module):
             resample_filter = [1, 3, 3, 1]
 
         if movq_decoder:
-            devide_ratio = int(32 * 2 ** self.num_downsamples)
             self.synthesis_network = MOVQDecoder(init_dim,
-                                                 init_dim // devide_ratio * devide_ratio,
+                                                 decoder_ch,
                                                  3,
                                                  init_res,
                                                  res_max,
                                                  num_res_blocks=2,
                                                  attn_resolutions=None,
-                                                 movq_stylelike=movq_stylelike
+                                                 movq_stylelike=movq_stylelike,
+                                                 no_atten_decoder=no_atten_decoder,
+                                                 ch_mult=decoder_ch_mult
                                                  )
             self.register_buffer('const_fourier_input',
                                  pos_encodings(init_res, init_dim // 4).reshape(
@@ -332,13 +348,14 @@ class HashAutoGenerator(nn.Module):
 
         level_now = 0
         feats_list = []
+        modulation_s_list = []
 
         for round_i in range(collect_round):
             res_now = int(self.init_res * 2 ** round_i)
             repeat_ratio_now = int(repeat_ratio * 2 ** round_i)
             level_num = 1 if not self.movq_decoder else self.synthesis_network.levels_list[round_i]
 
-            for _ in range(level_num):
+            for level_i in range(level_num):
                 # Sample the local spatial coordinates
                 if not self.no_concat_coord:
                     if not self.local_coords:
@@ -347,11 +364,11 @@ class HashAutoGenerator(nn.Module):
                         # For each level (resolution), we have different local
                         #   coordinates.
                         coords = sample_local_coords(b,
-                                                    img_size=res_now,
-                                                    local_size=repeat_ratio_now,
-                                                    max_local_size=max_repeat,
-                                                    max_levels=max_levels,
-                                                    level_now=level_now) 
+                                                     img_size=res_now,
+                                                     local_size=repeat_ratio_now,
+                                                     max_local_size=max_repeat,
+                                                     max_levels=max_levels,
+                                                     level_now=level_now) 
                     coords = coords.to(device).reshape(-1, self.spatial_coord_dim)
 
                     if self.fused_spatial:
@@ -367,7 +384,7 @@ class HashAutoGenerator(nn.Module):
 
                 # Feature collection process --------------------
                 feat_collect = []
-                modulation_s_collect = []
+                modulation_s_collect = [] # Only collect the initial modulation s
                 for i in range(self.hash_encoder_num):
                     feat_coords_now = feat_coords_tuple[i]
                     # Repeat the spatial
@@ -412,6 +429,8 @@ class HashAutoGenerator(nn.Module):
                 feats = torch.cat(feat_collect, dim=-1)
                 feats = feats.reshape(b, res_now, res_now, self.init_dim)
                 feats = feats.permute(0, 3, 1, 2)
+                modulation_s_list.append(torch.cat(modulation_s_collect, dim=-1))
+
                 feats_list.append(feats)
 
                 # Increase level num
@@ -424,8 +443,11 @@ class HashAutoGenerator(nn.Module):
         elif self.vq_decoder:
             out = self.synthesis_network(feats)
         else:
-            modulation_s = torch.cat(modulation_s_collect, dim=-1) 
-            modulation_s = modulation_s.unsqueeze(dim=1).repeat((1, self.synthesis_network.num_ws, 1))
+            modulation_s = torch.stack(modulation_s_list, dim=1) 
+            modulation_s = modulation_s.repeat_interleave(
+                self.synthesis_network.num_ws // modulation_s.shape[1] + 1,
+                dim=1)
+            modulation_s = modulation_s[:, :self.synthesis_network.num_ws, :]
             out = self.synthesis_network(modulation_s, feats_list)
         
         if not return_kl_terms:

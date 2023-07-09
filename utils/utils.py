@@ -114,7 +114,9 @@ def sample_coords(b: int, img_size: int,
     return coords
 
 
-def sample_local_coords(b: int, img_size: int, local_size: int,
+def sample_local_coords(b: int,
+                        img_size: int,
+                        local_size: int,
                         max_local_size: int,
                         max_levels: int,
                         level_now: int):

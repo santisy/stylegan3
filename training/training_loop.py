@@ -264,6 +264,7 @@ def training_loop(
         print()
     cur_nimg = resume_kimg * 1000
     cur_tick = 0
+    cur_iters = 0
     tick_start_nimg = cur_nimg
     tick_start_time = time.time()
     maintenance_time = tick_start_time - start_time
@@ -295,7 +296,15 @@ def training_loop(
             phase.opt.zero_grad(set_to_none=True)
             phase.module.requires_grad_(True)
             for real_img, real_c, gen_z, gen_c in zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c):
-                loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, gain=phase.interval, cur_nimg=cur_nimg)
+                loss.accumulate_gradients(phase=phase.name,
+                                          real_img=real_img,
+                                          real_c=real_c,
+                                          gen_z=gen_z,
+                                          gen_c=gen_c,
+                                          gain=phase.interval,
+                                          cur_nimg=cur_nimg,
+                                          cur_tick=batch_idx,
+                                          )
             phase.module.requires_grad_(False)
 
             # Update weights.

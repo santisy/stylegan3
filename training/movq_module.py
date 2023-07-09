@@ -245,7 +245,7 @@ class MOVQDecoder(nn.Module):
         out_ch,
         res_in,
         resolution,
-        #ch_mult=(1, 2, 4, 8),
+        ch_mult=(1, 2, 4, 4),
         num_res_blocks=2,
         attn_resolutions=None,
         dropout=0.0,
@@ -254,6 +254,7 @@ class MOVQDecoder(nn.Module):
         #zq_ch=None,
         add_conv=False,
         movq_stylelike=False,
+        no_atten_decoder=False,
         **ignorekwargs
     ):
         super().__init__()
@@ -263,36 +264,40 @@ class MOVQDecoder(nn.Module):
         self.resolution = resolution
         self.give_pre_end = give_pre_end
         self.movq_stylelike = movq_stylelike
+        self.no_atten_decoder = no_atten_decoder
+        ch_mult = ch_mult[::-1]
+        assert(len(ch_mult) == self.num_resolutions)
 
         self.z_shape = (1, z_channels, res_in, res_in)
 
         # z to block_in
+        block_in = ch * ch_mult[0]
         self.conv_in = torch.nn.Conv2d(
-            z_channels, ch, kernel_size=3, stride=1, padding=1
+            z_channels, block_in, kernel_size=3, stride=1, padding=1
         )
-        block_in = ch
         self.levels_list = [0,] * self.num_resolutions
 
         # middle
-        self.mid = nn.Module()
-        self.mid.block_1 = ResnetBlock(
-            in_channels=block_in,
-            out_channels=block_in,
-            temb_channels=self.temb_ch,
-            dropout=dropout,
-            zq_ch=z_channels,
-            add_conv=add_conv,
-        )
-        self.mid.attn_1 = AttnBlock(block_in, z_channels, add_conv=add_conv)
-        self.mid.block_2 = ResnetBlock(
-            in_channels=block_in,
-            out_channels=block_in,
-            temb_channels=self.temb_ch,
-            dropout=dropout,
-            zq_ch=z_channels,
-            add_conv=add_conv,
-        )
-        self.levels_list[0] += 1
+        if not no_atten_decoder:
+            self.mid = nn.Module()
+            self.mid.block_1 = ResnetBlock(
+                in_channels=block_in,
+                out_channels=block_in,
+                temb_channels=self.temb_ch,
+                dropout=dropout,
+                zq_ch=z_channels,
+                add_conv=add_conv,
+            )
+            self.mid.attn_1 = AttnBlock(block_in, z_channels, add_conv=add_conv)
+            self.mid.block_2 = ResnetBlock(
+                in_channels=block_in,
+                out_channels=block_in,
+                temb_channels=self.temb_ch,
+                dropout=dropout,
+                zq_ch=z_channels,
+                add_conv=add_conv,
+            )
+            self.levels_list[0] += 1
 
         # upsampling
         curr_res = res_in
@@ -300,7 +305,7 @@ class MOVQDecoder(nn.Module):
         for i_level in range(self.num_resolutions):
             block = nn.ModuleList()
             attn = nn.ModuleList()
-            block_out = int(ch / 2 ** i_level)
+            block_out = ch * ch_mult[i_level]
             for _ in range(self.num_res_blocks):
                 block.append(
                     ResnetBlock(
@@ -318,8 +323,7 @@ class MOVQDecoder(nn.Module):
             up = nn.Module()
             up.block = block
             up.attn = attn
-            # For each res blocks there are 2 spatial normalization there
-            self.levels_list[i_level] += self.num_res_blocks
+            self.levels_list[i_level] += 1
             if i_level != self.num_resolutions - 1:
                 up.upsample = Upsample(block_in, resamp_with_conv)
                 curr_res = curr_res * 2
@@ -330,7 +334,7 @@ class MOVQDecoder(nn.Module):
         self.conv_out = torch.nn.Conv2d(
             block_in, out_ch, kernel_size=3, stride=1, padding=1
         )
-        self.levels_list[-1] += 1
+        #self.levels_list[-1] += 1
 
     def forward(self, z, zq_list):
         if isinstance(zq_list, torch.Tensor):
@@ -348,17 +352,19 @@ class MOVQDecoder(nn.Module):
         zq_iter = iter(zq_list)
 
         # middle
-        z_mid = next(zq_iter)
-        h = self.mid.block_1(h, temb, z_mid)
-        h = self.mid.attn_1(h, z_mid)
-        h = self.mid.block_2(h, temb, z_mid)
+        if not self.no_atten_decoder:
+            z_mid = next(zq_iter)
+            h = self.mid.block_1(h, temb, z_mid)
+            h = self.mid.attn_1(h, z_mid)
+            h = self.mid.block_2(h, temb, z_mid)
 
         # upsampling
         for i_level in reversed(range(self.num_resolutions)):
+            z_now = next(zq_iter)
             for i_block in range(self.num_res_blocks):
-                h = self.up[i_level].block[i_block](h, temb, next(zq_iter))
+                h = self.up[i_level].block[i_block](h, temb, z_now)
                 if len(self.up[i_level].attn) > 0:
-                    h = self.up[i_level].attn[i_block](h, next(zq_iter))
+                    h = self.up[i_level].attn[i_block](h, z_now)
             if i_level != 0:
                 h = self.up[i_level].upsample(h)
 
@@ -366,7 +372,7 @@ class MOVQDecoder(nn.Module):
         if self.give_pre_end:
             return h
 
-        h = self.norm_out(h, next(zq_iter))
+        h = self.norm_out(h, zq_list[-1])
         h = nonlinearity(h)
         h = self.conv_out(h)
         return h
