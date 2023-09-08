@@ -217,6 +217,7 @@ def parse_comma_separated_list(s):
 @click.option('--split_val_n', help='The last n number images to be validation dataset.',       type=int, default=-1, show_default=True)
 @click.option('--hash_res_ratio', help='The ratio of maximum hash resolution to init_res',      type=int, default=1, show_default=True)
 @click.option('--expand_dim', help='Whether to expand the channel dimension',                   type=int, default=-1, show_default=True)
+@click.option('--grid_type', help='Grid type of the grid',                                      type=click.Choice(['hash', 'tiled']), default='hash', show_default=True)
 @click.option('--attn_resolutions', help='Where to do attention on encoder',                    
               type=lambda x: [int(y) for y in x.split(',')] if x is not None else None, default=None, show_default=True)
 @click.option('--fused_spatial', help='Fused spatial localization y in hash and x learning.',   type=bool, default=False, show_default=True)
@@ -327,7 +328,8 @@ def main(**kwargs):
                                  no_atten_decoder=opts.no_atten_decoder,
                                  decoder_ch=opts.decoder_ch,
                                  decoder_ch_mult=opts.decoder_ch_mult,
-                                 dual_connection=opts.dual_connection
+                                 dual_connection=opts.dual_connection,
+                                 grid_type=opts.grid_type
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)

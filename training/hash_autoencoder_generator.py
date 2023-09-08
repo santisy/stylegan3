@@ -69,6 +69,7 @@ class HashAutoGenerator(nn.Module):
                  decoder_ch: int=128,
                  decoder_ch_mult=[1,2,4,4],
                  dual_connection: bool=False,
+                 grid_type: str='hash',
                  **kwargs):
         """
             Args:
@@ -173,6 +174,7 @@ class HashAutoGenerator(nn.Module):
         self.num_downsamples = num_downsamples
         self.unfold_k = unfold_k
         self.dual_connection = dual_connection
+        self.grid_type = grid_type
         assert unfold_k >= 1
 
         if no_concat_coord or unfold_k > 1:
@@ -230,7 +232,8 @@ class HashAutoGenerator(nn.Module):
                                             direct_coord_input=True,
                                             no_modulated_linear=False,
                                             one_hash_group=True,
-                                            fused_spatial=fused_spatial
+                                            fused_spatial=fused_spatial,
+                                            gridtype=grid_type
                                             ))
         dprint('Number of groups of hash tables is'
                f' {len(self.hash_encoder_list)}', color='g')
