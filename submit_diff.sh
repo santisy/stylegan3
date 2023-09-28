@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:a100:2
-#SBATCH --job-name="diff_train"
+#SBATCH --job-name="diff_0924_02"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -23,15 +23,17 @@ source ~/.bashrc
 # Running training jobs
 accelerate launch --main_process_port 29502 \
     train_unconditional.py  \
-    --encoder_decoder_network training_runs/en_0908_01/network-snapshot-002600.pkl \
-    --train_data_dir exported/en_0908_01_extracted \
-    --output_dir training_runs/diff_0911 \
+    --encoder_decoder_network training_runs/en_0921_01/network-snapshot-002000.pkl \
+    --train_data datasets/lsunchurch_total \
+    --output_dir training_runs/diff_0924_02 \
     --feat_spatial_size 64 \
     --train_batch_size 48 \
-    --num_epochs 1000 \
+    --num_epochs 200 \
     --save_model_epochs 20 \
     --save_images_steps_k 4 \
     --learning_rate 1e-4 \
     --use_ema \
     --checkpoints_total_limit 5 \
-    --checkpointing_steps 2000
+    --dataloader_num_workers 2 \
+    --checkpointing_steps 2000 \
+    --resume_from_checkpoint "latest"

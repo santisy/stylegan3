@@ -4,7 +4,6 @@ import logging
 import math
 import os
 import shutil
-from datetime import timedelta
 from pathlib import Path
 import numpy as np
 from typing import Optional
@@ -14,7 +13,7 @@ import legacy
 import accelerate
 import torch
 import torch.nn.functional as F
-from accelerate import Accelerator, InitProcessGroupKwargs, DistributedDataParallelKwargs
+from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration
 from huggingface_hub import HfFolder, Repository, create_repo, whoami
@@ -22,7 +21,7 @@ from packaging import version
 from tqdm import tqdm
 from functools import partialmethod
 tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
-from diffusions.dataset import Dataset
+from training.dataset import ImageFolderDataset as Dataset
 from diffusions.decode import decode_nc
 from training.training_loop import save_image_grid
 
@@ -31,7 +30,7 @@ from diffusers import DDPMScheduler, UNet2DModel
 from diffusions.ddpm_pipeline import DDPMPipeline
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
-from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
+from diffusers.utils import is_tensorboard_available, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
 
@@ -66,7 +65,7 @@ def parse_args():
         help="The encoder decoder network pkl path string.", required=True
     )
     parser.add_argument(
-        "--train_data_dir",
+        "--train_data",
         type=str,
         required=True,
         help=(
@@ -233,7 +232,7 @@ def parse_args():
     parser.add_argument(
         "--dim_mults", type=lambda x: [int(y) for y in x.split(',')],
         help='The channel multiplication of the network.',
-        default='1,2,2,4'
+        default='1,2,3,4,4'
     )
 
     args = parser.parse_args()
@@ -351,11 +350,16 @@ def main(args):
 
     # Initialize the model
     block_out_channels = [args.init_dim * mult_ for mult_ in args.dim_mults]
+    down_block_types = ["DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"]
+    up_block_types = ["AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"]
     # Try to use the default one
     model = UNet2DModel(
         sample_size=args.feat_spatial_size,
         in_channels=G.feat_coord_dim,
         out_channels=G.feat_coord_dim,
+        down_block_types=down_block_types,
+        up_block_types=up_block_types,
+        block_out_channels=block_out_channels,
         layers_per_block=2,
     )
 
@@ -409,17 +413,22 @@ def main(args):
 
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
-    dataset = Dataset(args.train_data_dir,
-                      dim=G.feat_coord_dim,
-                      size=args.feat_spatial_size,
-                      noise_perturb=False,
-                      noise_perturb_sigma=G.noise_perturb_sigma,
-                      )
+    dataset = Dataset(args.train_data)
 
     logger.info(f"Dataset size: {len(dataset)}")
 
+    def collate_fn(batch_tuple):
+        img = torch.tensor(torch.stack([torch.tensor(x[0]) for x in batch_tuple], dim=0))
+        img = img.float() / 127.5 - 1.0
+        return img
+
     train_dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers
+        dataset,
+        batch_size=args.train_batch_size,
+        shuffle=True,
+        num_workers=args.dataloader_num_workers,
+        prefetch_factor=2,
+        collate_fn=collate_fn
     )
 
     # Initialize the learning rate scheduler
@@ -496,7 +505,10 @@ def main(args):
                     progress_bar.update(1)
                 continue
 
-            clean_images = batch
+            batch = batch.to(accelerator.device)
+            with torch.no_grad():
+                clean_images = G.encode(batch).detach()
+
             # Sample noise that we'll add to the images
             noise = torch.randn(
                 clean_images.shape, dtype=(torch.float32 if args.mixed_precision == "no" else torch.float16)
@@ -589,7 +601,7 @@ def main(args):
                         scheduler=noise_scheduler,
                     )
 
-                    generator = torch.Generator(device=pipeline.device).manual_seed(0)
+                    generator = torch.Generator(device=pipeline.device).manual_seed(global_step//1000)
                     # run pipeline in inference (sample random noise and denoise)
                     sample_ni = pipeline(
                         generator=generator,
