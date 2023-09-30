@@ -234,6 +234,12 @@ def parse_args():
         help='The channel multiplication of the network.',
         default='1,2,3,4,4'
     )
+    parser.add_argument(
+        "--class_condition", action="store_true"
+    )
+    parser.add_argument(
+        "--condition_scale", type=float, default=0.2
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -348,6 +354,11 @@ def main(args):
         G = G.eval()
         G = G.to(accelerator.device)
 
+    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
+    # download the dataset.
+    dataset = Dataset(args.train_data,
+                      imagenet_flag=args.class_condition)
+
     # Initialize the model
     block_out_channels = [args.init_dim * mult_ for mult_ in args.dim_mults]
     down_block_types = ["DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"]
@@ -361,6 +372,7 @@ def main(args):
         up_block_types=up_block_types,
         block_out_channels=block_out_channels,
         layers_per_block=2,
+        num_class_embeds=datasets.get_class_dim() + 1 if args.class_condition else None,
     )
 
     # Create EMA for the model.
@@ -411,16 +423,22 @@ def main(args):
     # Get the datasets: you can either provide your own training and evaluation files (see below)
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
 
-    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
-    # download the dataset.
-    dataset = Dataset(args.train_data)
 
     logger.info(f"Dataset size: {len(dataset)}")
 
     def collate_fn(batch_tuple):
         img = torch.tensor(torch.stack([torch.tensor(x[0]) for x in batch_tuple], dim=0))
         img = img.float() / 127.5 - 1.0
-        return img
+        if args.class_condition:
+            label = None
+        else:
+            # Shift the label to +1
+            # Zero is the unconditional label
+            label = torch.cat([torch.tensor(x[1]) for x in batch_tuple]).flatten().long() + 1
+            # Randomly drop label to zero (null)
+            drop_idx = torch.randperm(len(label))[:len(label)//2]
+            label[drop_idx] = 0
+        return img, label
 
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -505,9 +523,13 @@ def main(args):
                     progress_bar.update(1)
                 continue
 
-            batch = batch.to(accelerator.device)
+            image_input = batch[0].to(accelerator.device)
+            if args.class_condition:
+                labels = batch[1].to(accelerator.device)
+            else:
+                labels = None
             with torch.no_grad():
-                clean_images = G.encode(batch).detach()
+                clean_images = G.encode(image_input).detach()
 
             # Sample noise that we'll add to the images
             noise = torch.randn(
@@ -525,7 +547,7 @@ def main(args):
 
             with accelerator.accumulate(model):
                 # Predict the noise residual
-                model_output = model(noisy_images, timesteps).sample
+                model_output = model(noisy_images, timesteps, class_labels=labels).sample
 
                 if args.prediction_type == "epsilon":
                     loss = F.mse_loss(model_output, noise)  # this could have different weights!
@@ -599,6 +621,8 @@ def main(args):
                     pipeline = DDPMPipeline(
                         unet=unet,
                         scheduler=noise_scheduler,
+                        class_condition=args.class_condition,
+                        condition_scale=args.condition_scale,
                     )
 
                     generator = torch.Generator(device=pipeline.device).manual_seed(global_step//1000)

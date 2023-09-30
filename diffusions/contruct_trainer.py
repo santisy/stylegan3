@@ -40,7 +40,7 @@ def construct_imagen_trainer(G, cfg, device=None, ckpt_path=None, test_flag=Fals
                 image_sizes = (cfg.feat_spatial_size, ),
                 timesteps = 1000,
                 channels=G.feat_coord_dim,
-                auto_normalize_img=True,
+                auto_normalize_img=False,
                 min_snr_gamma=5,
                 min_snr_loss_weight=cfg.get('use_min_snr', True),
                 dynamic_thresholding=False,

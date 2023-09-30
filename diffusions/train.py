@@ -22,9 +22,11 @@ from training.training_loop import save_image_grid
 import torchvision.utils as tvu
 
 from utils.utils import delete_file
-from diffusions.dataset import Dataset
+from utils.utils import cast_device
+from training.dataset import ImageFolderDataset as Dataset
 from diffusions.decode import decode_nc
 from diffusions.contruct_trainer import construct_imagen_trainer
+from imagen_pytorch import ImagenTrainer
 
 # Disable tqdm globally
 from tqdm import tqdm
@@ -77,6 +79,7 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--only_load_model', type=bool, default=False, show_default=True)
 @click.option('--use_ddpm', type=bool, default=False, show_default=True)
 @click.option('--use_min_snr', type=bool, default=True, show_default=True)
+@click.option('--class_condition', type=bool, default=False, show_default=True)
 
 def train_diffusion(**kwargs):
 
@@ -94,13 +97,10 @@ def train_diffusion(**kwargs):
     with open(os.path.join(run_dir, 'config.json'), 'w') as f:
         json.dump(opts, f, indent=4)
     
-    use_kl_reg = None
     # The encoder decoder one
     with dnnlib.util.open_url(opts.encoder_decoder_network) as f:
         G = legacy.load_network_pkl(f)['G_ema'] # type: ignore
         G = G.eval()
-        use_kl_reg = G.use_kl_reg
-
 
     # Diffusion Unet Module and optimizer --------------------
     trainer = construct_imagen_trainer(G, opts, device=None, ckpt_path=opts.resume)
@@ -115,19 +115,51 @@ def train_diffusion(**kwargs):
     torch.backends.cuda.matmul.allow_tf32 = False       # Improves numerical accuracy.
     torch.backends.cudnn.allow_tf32 = False             # Improves numerical accuracy.
 
-    # ------------------------------
+    # Dataset constructing and preparing ------------------------------
 
     # Dataset, sampler and iterator
-    dataset = Dataset(opts.dataset,
-                      dim=G.feat_coord_dim,
-                      size=opts.feat_spatial_size,
-                      use_kl_reg=use_kl_reg,
-                      noise_perturb=G.noise_perturb if not opts.no_noise_perturb else False,
-                      noise_perturb_sigma=G.noise_perturb_sigma,
-                      )
-    trainer.add_train_dataset(dataset,
-                              batch_size=opts.batch_size,
-                              shuffle=True)
+    # Add the collate_fn + encode part
+    dataset = Dataset(args.train_data,
+                      imagenet_flag=opts.class_condition)
+    # Collate fn
+    def collate_fn(batch_tuple):
+        img = torch.tensor(torch.stack([torch.tensor(x[0]) for x in batch_tuple], dim=0))
+        img = img.float() / 127.5 - 1.0
+        if args.class_condition:
+            label = None
+        else:
+            # Shift the label to +1
+            # Zero is the unconditional label
+            label = torch.cat([torch.tensor(x[1]) for x in batch_tuple]).flatten().long() + 1
+            # Randomly drop label to zero (null)
+            drop_idx = torch.randperm(len(label))[:len(label)//2]
+            label[drop_idx] = 0
+        return img, label
+    # Contruct dataloader
+    train_dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=opts.train_batch_size,
+        shuffle=True,
+        num_workers=2,
+        prefetch_factor=2,
+        collate_fn=collate_fn
+    )
+    # Add dataloader
+    trainer.add_train_dataloader(train_dataloader)
+    # Redefine the `step_with_dl_iter` function
+    def step_with_dl_iter(self, dl_iter, **kwargs):
+        # Cast device in compatible with the `collate_fn`
+        dl_tuple_output = cast_device(cast_tuple(next(dl_iter)), self.device)
+        model_input = dict(list(zip(self.dl_tuple_output_keywords_names, dl_tuple_output)))
+        with torch.no_grad():
+            model_input[self.dl_tuple_output_keywords_names[0]] = G.encode(dl_tuple_output[0])
+        loss = self.forward(**{**kwargs, **model_input})
+        return loss    
+    # Rebind
+    trainer.step_with_dl_iter = step_with_dl_iter.__get__(trainer, ImagenTrainer)
+    # --------------------------------------------------
+
+    # Main process flag
     main_p_flag = trainer.accelerator.is_main_process
 
     # Counting initials

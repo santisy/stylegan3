@@ -296,8 +296,11 @@ class HashAutoGenerator(nn.Module):
 
         return None, None
 
-    def encode(self, img: torch.Tensor):
-        if not self.use_kl_reg:
+    def encode(self, img: torch.Tensor, key_codes = None):
+        mu, log_var = None, None
+        if key_codes is not None:
+            feat_coords = key_codes
+        elif not self.use_kl_reg:
             feat_coords = self.img_encoder(img) # B x F_C_C x W x H
         else:
             mu, log_var = self.img_encoder(img)
@@ -311,7 +314,7 @@ class HashAutoGenerator(nn.Module):
                     torch.randn_like(feat_coords) * self.noise_perturb_sigma,
                     0, 1)
 
-        return feat_coords
+        return feat_coords, mu, log_var
         
 
     def synthesis(self,
@@ -334,21 +337,7 @@ class HashAutoGenerator(nn.Module):
         b = img.size(0) if img is not None else key_codes.size(0)
         device = img.device if img is not None else key_codes.device
 
-        if key_codes is not None:
-            feats = key_codes
-        elif not self.use_kl_reg:
-            feat_coords = self.img_encoder(img) # B x F_C_C x W x H
-        else:
-            mu, log_var = self.img_encoder(img)
-            log_var = torch.clamp(log_var, -30.0, 20.0)
-            std = torch.exp(0.5 * log_var)
-            feat_coords = F.sigmoid(torch.randn_like(std) * std + mu)
-
-        if self.noise_perturb:
-            feat_coords = torch.clip(
-                    feat_coords  +
-                    torch.randn_like(feat_coords) * self.noise_perturb_sigma,
-                    0, 1)
+        feat_coords, mu, log_var = self.encode(img, key_codes)
 
         # Split the coordinates
         if self.expand_dim > 0:
