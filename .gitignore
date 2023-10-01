@@ -1,3 +1,5 @@
 datasets/
 exported/
 metrics_cache/
+training_runs/
+sbatch_logs/

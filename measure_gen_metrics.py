@@ -149,10 +149,10 @@ def main(**kwargs):
         with open(opts.diff_config, 'r') as f:
             cfg = dnnlib.EasyDict(json.load(f))
             diff_model = construct_imagen_trainer(G,
-                                                cfg,
-                                                device,
-                                                opts.network_diff_pkl,
-                                                test_flag=True)
+                                                  cfg,
+                                                  device,
+                                                  opts.network_diff_pkl,
+                                                  test_flag=True)
         # Make folders
         os.makedirs(exported_out, exist_ok=True)
     else:

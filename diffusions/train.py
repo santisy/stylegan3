@@ -27,6 +27,7 @@ from training.dataset import ImageFolderDataset as Dataset
 from diffusions.decode import decode_nc
 from diffusions.contruct_trainer import construct_imagen_trainer
 from imagen_pytorch import ImagenTrainer
+from imagen_pytorch.trainer import cast_tuple
 
 # Disable tqdm globally
 from tqdm import tqdm
@@ -108,6 +109,7 @@ def train_diffusion(**kwargs):
 
 
     rank_now = tdist.get_rank() if tdist.is_initialized() else 0
+    world_size = tdist.get_world_size() if tdist.is_initialized() else 1
     # Set randomness
     np.random.seed(rank_now)
     torch.manual_seed(rank_now)
@@ -119,13 +121,13 @@ def train_diffusion(**kwargs):
 
     # Dataset, sampler and iterator
     # Add the collate_fn + encode part
-    dataset = Dataset(args.train_data,
+    dataset = Dataset(opts.dataset,
                       imagenet_flag=opts.class_condition)
     # Collate fn
     def collate_fn(batch_tuple):
         img = torch.tensor(torch.stack([torch.tensor(x[0]) for x in batch_tuple], dim=0))
         img = img.float() / 127.5 - 1.0
-        if args.class_condition:
+        if opts.class_condition:
             label = None
         else:
             # Shift the label to +1
@@ -138,7 +140,7 @@ def train_diffusion(**kwargs):
     # Contruct dataloader
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
-        batch_size=opts.train_batch_size,
+        batch_size=opts.batch_size,
         shuffle=True,
         num_workers=2,
         prefetch_factor=2,
@@ -148,11 +150,15 @@ def train_diffusion(**kwargs):
     trainer.add_train_dataloader(train_dataloader)
     # Redefine the `step_with_dl_iter` function
     def step_with_dl_iter(self, dl_iter, **kwargs):
+        if opts.class_condition:
+            keywords_name = self.dl_tuple_output_keywords_names[:2]
+        else:
+            keywords_name = (self.dl_tuple_output_keywords_names[0],)
         # Cast device in compatible with the `collate_fn`
         dl_tuple_output = cast_device(cast_tuple(next(dl_iter)), self.device)
-        model_input = dict(list(zip(self.dl_tuple_output_keywords_names, dl_tuple_output)))
+        model_input = dict(list(zip(keywords_name, dl_tuple_output)))
         with torch.no_grad():
-            model_input[self.dl_tuple_output_keywords_names[0]] = G.encode(dl_tuple_output[0])
+            model_input[keywords_name[0]] = (G.encode(dl_tuple_output[0])[0] - 0.5) * 2.0
         loss = self.forward(**{**kwargs, **model_input})
         return loss    
     # Rebind
@@ -177,7 +183,7 @@ def train_diffusion(**kwargs):
         loss = trainer.train_step(unet_number = 1)
 
         # Increase couting
-        count += opts.batch_size
+        count += opts.batch_size * world_size
         global_step = count // 1000
 
         # Recording
@@ -200,7 +206,7 @@ def train_diffusion(**kwargs):
             sample_ni = trainer.sample(batch_size=opts.sample_num, use_tqdm=False)
             print('Value range of sampled nc: ', sample_ni.min(), sample_ni.max())
             print('Stats of sampled nc:', sample_ni.mean(), sample_ni.var())
-            sample_ni = torch.clip(sample_ni, 0, 1)
+            sample_ni = torch.clip((sample_ni + 1) / 2.0, 0, 1)
             with torch.no_grad():
                 sample_imgs = decode_nc(G, sample_ni).cpu().numpy()
             # Save image to local target folder

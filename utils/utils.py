@@ -234,7 +234,7 @@ def unfold_k_with_padding(x, k, dilation=1, stride=1):
 def cast_device(batch_tuple, device):
     out = []
     for x in batch_tuple:
-        if isinstance(torch.Tensor):
+        if isinstance(x, torch.Tensor):
             x = x.to(device)
         out.append(x)
     return tuple(out)

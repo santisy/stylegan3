@@ -13,6 +13,7 @@ import legacy
 import accelerate
 import torch
 import torch.nn.functional as F
+import torch.distributed as tdist
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration
@@ -274,6 +275,11 @@ def main(args):
         kwargs_handlers=[kwargs],
     )
 
+    # Different seed for different rank (local rank)
+    rank_now = tdist.get_rank() if tdist.is_initialized() else 0
+    np.random.seed(rank_now)
+    torch.manual_seed(rank_now)
+
     if args.logger == "tensorboard":
         if not is_tensorboard_available():
             raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
@@ -529,7 +535,9 @@ def main(args):
             else:
                 labels = None
             with torch.no_grad():
-                clean_images = G.encode(image_input).detach()
+                # `Clean feat coords`
+                clean_images = G.encode(image_input)[0].detach()
+                clean_images = clean_images * 2.0 - 1.0
 
             # Sample noise that we'll add to the images
             noise = torch.randn(
@@ -620,9 +628,7 @@ def main(args):
 
                     pipeline = DDPMPipeline(
                         unet=unet,
-                        scheduler=noise_scheduler,
-                        class_condition=args.class_condition,
-                        condition_scale=args.condition_scale,
+                        scheduler=noise_scheduler
                     )
 
                     generator = torch.Generator(device=pipeline.device).manual_seed(global_step//1000)
@@ -631,7 +637,10 @@ def main(args):
                         generator=generator,
                         batch_size=args.eval_batch_size,
                         num_inference_steps=args.ddpm_num_inference_steps,
+                        class_condition=args.class_condition,
+                        condition_scale=args.condition_scale,
                     )
+                    sample_ni = torch.clip((sample_ni + 1.0) / 2.0, 0, 1)
 
                     with torch.no_grad():
                         sample_imgs = decode_nc(G, sample_ni).cpu().numpy()
