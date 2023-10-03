@@ -21,6 +21,7 @@ from huggingface_hub import HfFolder, Repository, create_repo, whoami
 from packaging import version
 from tqdm import tqdm
 from functools import partialmethod
+from functools import partial
 tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 from training.dataset import ImageFolderDataset as Dataset
 from diffusions.decode import decode_nc
@@ -241,6 +242,9 @@ def parse_args():
     parser.add_argument(
         "--condition_scale", type=float, default=0.2
     )
+    parser.add_argument(
+        "--work_on_tmp_dir", action="store_true"
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -261,10 +265,32 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
 
 
 def main(args):
-    logging_dir = os.path.join(args.output_dir, args.logging_dir)
-    eval_sample_dir = os.path.join(args.output_dir, 'eval_sample')
+    # Different seed for different rank (local rank)
+    rank_now = tdist.get_rank() if tdist.is_initialized() else 0
+    np.random.seed(rank_now)
+    torch.manual_seed(rank_now)
+
+    if args.work_on_tmp_dir:
+        tmp_dir = os.getenv("SLURM_TMPDIR")
+        output_dir = os.path.join(tmp_dir, args.output_dir)
+        new_data_root = os.path.join(tmp_dir, "datasets")
+        os.makedirs(new_data_root, exist_ok=True)
+        dataset_path = os.path.join(new_data_root, os.path.basename(args.train_data))
+    else:
+        output_dir = args.output_dir
+        dataset_path = args.train_data
+
+    if rank_now == 0 and args.work_on_tmp_dir and not os.path.exists(dataset_path):
+        print(f"\033[92mCopying dataset {args.train_data} to {tmp_dir} ...\033[00m")
+        os.system(f"cp {args.train_data} {new_data_root}") 
+        print("\033[92mFinished copying.\033[00m")
+    if tdist.is_initialized():
+        tdist.barrier()
+
+    logging_dir = os.path.join(output_dir, args.logging_dir)
+    eval_sample_dir = os.path.join(output_dir, 'eval_sample')
     os.makedirs(eval_sample_dir, exist_ok=True)
-    accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
+    accelerator_project_config = ProjectConfiguration(project_dir=output_dir, logging_dir=logging_dir)
 
     kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)  # a big number for high resolution or big dataset
     accelerator = Accelerator(
@@ -274,11 +300,6 @@ def main(args):
         project_config=accelerator_project_config,
         kwargs_handlers=[kwargs],
     )
-
-    # Different seed for different rank (local rank)
-    rank_now = tdist.get_rank() if tdist.is_initialized() else 0
-    np.random.seed(rank_now)
-    torch.manual_seed(rank_now)
 
     if args.logger == "tensorboard":
         if not is_tensorboard_available():
@@ -340,19 +361,19 @@ def main(args):
     if accelerator.is_main_process:
         if args.push_to_hub:
             if args.hub_model_id is None:
-                repo_name = get_full_repo_name(Path(args.output_dir).name, token=args.hub_token)
+                repo_name = get_full_repo_name(Path(output_dir).name, token=args.hub_token)
             else:
                 repo_name = args.hub_model_id
             create_repo(repo_name, exist_ok=True, token=args.hub_token)
-            repo = Repository(args.output_dir, clone_from=repo_name, token=args.hub_token)
+            repo = Repository(output_dir, clone_from=repo_name, token=args.hub_token)
 
-            with open(os.path.join(args.output_dir, ".gitignore"), "w+") as gitignore:
+            with open(os.path.join(output_dir, ".gitignore"), "w+") as gitignore:
                 if "step_*" not in gitignore:
                     gitignore.write("step_*\n")
                 if "epoch_*" not in gitignore:
                     gitignore.write("epoch_*\n")
-        elif args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
+        elif output_dir is not None:
+            os.makedirs(output_dir, exist_ok=True)
 
     # The encoder decoder one
     with dnnlib.util.open_url(args.encoder_decoder_network) as f:
@@ -362,7 +383,7 @@ def main(args):
 
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
-    dataset = Dataset(args.train_data,
+    dataset = Dataset(dataset_path,
                       imagenet_flag=args.class_condition)
 
     # Initialize the model
@@ -378,7 +399,7 @@ def main(args):
         up_block_types=up_block_types,
         block_out_channels=block_out_channels,
         layers_per_block=2,
-        num_class_embeds=datasets.get_class_dim() + 1 if args.class_condition else None,
+        num_class_embeds=dataset.class_dim + 1 if args.class_condition else None,
     )
 
     # Create EMA for the model.
@@ -435,14 +456,13 @@ def main(args):
     def collate_fn(batch_tuple):
         img = torch.tensor(torch.stack([torch.tensor(x[0]) for x in batch_tuple], dim=0))
         img = img.float() / 127.5 - 1.0
-        if args.class_condition:
+        if not args.class_condition:
             label = None
         else:
-            # Shift the label to +1
-            # Zero is the unconditional label
-            label = torch.cat([torch.tensor(x[1]) for x in batch_tuple]).flatten().long() + 1
+            # Shift the label to +1, Zero is the unconditional label
+            label = torch.cat([torch.tensor(x[1]).reshape(1) for x in batch_tuple]).long() + 1
             # Randomly drop label to zero (null)
-            drop_idx = torch.randperm(len(label))[:len(label)//2]
+            drop_idx = torch.randperm(label.shape[0])[:len(label)//2]
             label[drop_idx] = 0
         return img, label
 
@@ -493,6 +513,7 @@ def main(args):
     first_epoch = 0
 
     # Potentially load in the weights and states from a previous save
+    # NOTE: Try to use the local file to resume
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint != "latest":
             path = os.path.basename(args.resume_from_checkpoint)
@@ -589,7 +610,7 @@ def main(args):
                 if global_step % args.checkpointing_steps == 0 and accelerator.is_main_process:
                     # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
                     if args.checkpoints_total_limit is not None:
-                        checkpoints = os.listdir(args.output_dir)
+                        checkpoints = os.listdir(output_dir)
                         checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
                         checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
@@ -604,10 +625,10 @@ def main(args):
                             logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
                             for removing_checkpoint in removing_checkpoints:
-                                removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+                                removing_checkpoint = os.path.join(output_dir, removing_checkpoint)
                                 shutil.rmtree(removing_checkpoint)
 
-                    save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                    save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
                     accelerator.save_state(save_path)
                     logger.info(f"Saved state to {save_path}")
 
@@ -657,30 +678,6 @@ def main(args):
         progress_bar.close()
 
         accelerator.wait_for_everyone()
-
-        # Generate sample images for visual inspection
-        if accelerator.is_main_process:
-
-            if epoch % args.save_model_epochs == 0 or epoch == args.num_epochs - 1:
-                # save the model
-                unet = accelerator.unwrap_model(model)
-
-                if args.use_ema:
-                    ema_model.store(unet.parameters())
-                    ema_model.copy_to(unet.parameters())
-
-                pipeline = DDPMPipeline(
-                    unet=unet,
-                    scheduler=noise_scheduler,
-                )
-
-                pipeline.save_pretrained(args.output_dir)
-
-                if args.use_ema:
-                    ema_model.restore(unet.parameters())
-
-                #if args.push_to_hub:
-                #    repo.push_to_hub(commit_message=f"Epoch {epoch}", blocking=False)
 
     accelerator.end_training()
 

@@ -179,7 +179,10 @@ class ImageFolderDataset(Dataset):
         self.imagenet_flag = imagenet_flag
         if imagenet_flag:
             with open("datasets/imagenet_classes.json", "r") as f:
-                self.imagenet_classes = json.load(f)
+                class_names = sorted(json.load(f))
+            self.imagenet_classes = dict(zip(class_names,
+                                             list(range(len(class_names)))))
+
 
         if os.path.isdir(self._path):
             self._type = 'dir'
@@ -192,6 +195,7 @@ class ImageFolderDataset(Dataset):
 
         PIL.Image.init()
         self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in PIL.Image.EXTENSION)
+        # Filter out wrongly added validation file
         if split_val_n > 0:
             self._image_fnames = self._image_fnames[:-split_val_n]
         if len(self._image_fnames) == 0:
@@ -236,14 +240,19 @@ class ImageFolderDataset(Dataset):
             if pyspng is not None and self._file_ext(fname) == '.png':
                 image = pyspng.load(f.read())
             else:
-                image = np.array(PIL.Image.open(f))
+                try:
+                    image = np.array(PIL.Image.open(f))
+                except:
+                    nparr = np.fromstring(f.read(), np.uint8) 
+                    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         if image.ndim == 2:
             image = image[:, :, np.newaxis] # HW => HWC
         image = image.transpose(2, 0, 1) # HWC => CHW
         return image
 
     @property
-    def get_class_dim(self):
+    def class_dim(self):
         if self.imagenet_flag:
             return len(self.imagenet_classes)
         else:

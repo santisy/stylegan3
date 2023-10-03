@@ -11,7 +11,7 @@
 echo "SLURM_JOBID="$SLURM_JOBID
 echo "SLURM_JOB_NODELIST"=$SLURM_JOB_NODELIST
 echo "SLURM_NNODES"=$SLURM_NNODES
-echo "SLURMTMPDIR="$SLURMTMPDIR
+echo "SLURMTMPDIR="$SLURM_TMPDIR
 echo "working directory = "$SLURM_SUBMIT_DIR
 # sample process (list hostnames of the nodes you've requested)
 NPROCS=`srun --nodes=${SLURM_NNODES} bash -c 'hostname' | wc -l`
@@ -28,12 +28,12 @@ accelerate launch --main_process_port 29502 \
     --output_dir training_runs/diff_1001_01 \
     --feat_spatial_size 64 \
     --train_batch_size 48 \
-    --num_epochs 200 \
+    --num_epochs 400 \
     --save_model_epochs 20 \
     --save_images_steps_k 4 \
     --learning_rate 1e-4 \
     --use_ema \
     --checkpoints_total_limit 5 \
     --dataloader_num_workers 2 \
-    --checkpointing_steps 2000
-#    --resume_from_checkpoint "latest"
+    --checkpointing_steps 2000 \
+    --resume_from_checkpoint "latest"

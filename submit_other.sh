@@ -20,4 +20,5 @@ echo NPROCS=$NPROCS
 source ~/.bashrc
 
 # Running training jobs
-cd datasets && python extract_imagenet.py
+#cd datasets && python extract_imagenet.py
+cd datasets && zip -rq lsunchurch_total.zip lsunchurch_total

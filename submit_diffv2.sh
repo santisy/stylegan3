@@ -11,7 +11,7 @@
 echo "SLURM_JOBID="$SLURM_JOBID
 echo "SLURM_JOB_NODELIST"=$SLURM_JOB_NODELIST
 echo "SLURM_NNODES"=$SLURM_NNODES
-echo "SLURMTMPDIR="$SLURMTMPDIR
+echo "SLURMTMPDIR="$SLURM_TMPDIR
 echo "working directory = "$SLURM_SUBMIT_DIR
 # sample process (list hostnames of the nodes you've requested)
 NPROCS=`srun --nodes=${SLURM_NNODES} bash -c 'hostname' | wc -l`
@@ -37,5 +37,6 @@ accelerate launch --main_process_port 29502 \
     --cosine_decay_max_steps 1000000 \
     --dim_mults '1,2,3,4' \
     --atten_layers '2,3,4' \
-    --snap_k 640 \
-    --sample_k 1280
+    --snap_k 320 \
+    --sample_k 1280 \
+    --resume training_runs/diff_1001_02/network-snapshot-2560.pkl

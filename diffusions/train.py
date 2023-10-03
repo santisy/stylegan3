@@ -81,13 +81,18 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--use_ddpm', type=bool, default=False, show_default=True)
 @click.option('--use_min_snr', type=bool, default=True, show_default=True)
 @click.option('--class_condition', type=bool, default=False, show_default=True)
+@click.option('--work_on_tmp_dir', type=bool, default=False)
 
 def train_diffusion(**kwargs):
 
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
 
     # Prepare folder and tensorboard
-    run_dir = os.path.join('training_runs', opts.exp_id)
+    if opts.work_on_tmp_dir:
+        tmp_dir = os.getenv("SLURM_TMPDIR")
+    else:
+        tmp_dir = ""
+    run_dir = os.path.join(tmp_dir, 'training_runs', opts.exp_id)
     os.makedirs(run_dir, exist_ok=True)
     import torch.utils.tensorboard as tensorboard
     stats_tfevents = tensorboard.SummaryWriter(run_dir)
@@ -110,6 +115,20 @@ def train_diffusion(**kwargs):
 
     rank_now = tdist.get_rank() if tdist.is_initialized() else 0
     world_size = tdist.get_world_size() if tdist.is_initialized() else 1
+    # Copy dataset if necessary
+    if opts.work_on_tmp_dir:
+        new_data_root = os.path.join(tmp_dir, "datasets")
+        os.makedirs(new_data_root, exist_ok=True)
+        dataset_path = os.path.join(new_data_root, os.path.basename(opts.dataset))
+    else:
+        dataset_path = opts.dataset
+    if rank_now == 0 and args.work_on_tmp_dir and not os.path.exists(dataset_path):
+        print(f"\033[92mCopying dataset {opts.dataset} to {tmp_dir} ...\033[00m")
+        os.system(f"cp {opts.dataset} {new_data_root}") 
+        print("\033[92mFinished copying.\033[00m")
+    if tdist.is_initialized():
+        tdist.barrier()
+
     # Set randomness
     np.random.seed(rank_now)
     torch.manual_seed(rank_now)
@@ -121,13 +140,13 @@ def train_diffusion(**kwargs):
 
     # Dataset, sampler and iterator
     # Add the collate_fn + encode part
-    dataset = Dataset(opts.dataset,
+    dataset = Dataset(dataset_path,
                       imagenet_flag=opts.class_condition)
     # Collate fn
     def collate_fn(batch_tuple):
         img = torch.tensor(torch.stack([torch.tensor(x[0]) for x in batch_tuple], dim=0))
         img = img.float() / 127.5 - 1.0
-        if opts.class_condition:
+        if not opts.class_condition:
             label = None
         else:
             # Shift the label to +1
