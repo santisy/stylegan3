@@ -122,7 +122,7 @@ def train_diffusion(**kwargs):
         dataset_path = os.path.join(new_data_root, os.path.basename(opts.dataset))
     else:
         dataset_path = opts.dataset
-    if rank_now == 0 and args.work_on_tmp_dir and not os.path.exists(dataset_path):
+    if rank_now == 0 and opts.work_on_tmp_dir and not os.path.exists(dataset_path):
         print(f"\033[92mCopying dataset {opts.dataset} to {tmp_dir} ...\033[00m")
         os.system(f"cp {opts.dataset} {new_data_root}") 
         print("\033[92mFinished copying.\033[00m")

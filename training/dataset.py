@@ -8,14 +8,16 @@
 
 """Streaming images and labels from datasets created with dataset_tool.py."""
 
+import io
 import os
 import cv2
 import numpy as np
-import zipfile
+#import zipfile
 import PIL.Image
 import json
 import torch
 import dnnlib
+from utils.parallelzipfile import ParallelZipFile as ZipFile
 
 try:
     import pyspng
@@ -214,14 +216,14 @@ class ImageFolderDataset(Dataset):
     def _get_zipfile(self):
         assert self._type == 'zip'
         if self._zipfile is None:
-            self._zipfile = zipfile.ZipFile(self._path)
+            self._zipfile = ZipFile(self._path)
         return self._zipfile
 
     def _open_file(self, fname):
         if self._type == 'dir':
             return open(os.path.join(self._path, fname), 'rb')
         if self._type == 'zip':
-            return self._get_zipfile().open(fname, 'r')
+            return io.BytesIO(self._get_zipfile().read(fname))
         return None
 
     def close(self):

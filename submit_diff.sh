@@ -24,7 +24,7 @@ source ~/.bashrc
 accelerate launch --main_process_port 29502 \
     train_unconditional.py  \
     --encoder_decoder_network training_runs/en_0929_01/network-snapshot-002400.pkl \
-    --train_data datasets/lsunchurch_total \
+    --train_data datasets/lsunchurch_total.zip \
     --output_dir training_runs/diff_1001_01 \
     --feat_spatial_size 64 \
     --train_batch_size 48 \
@@ -36,4 +36,5 @@ accelerate launch --main_process_port 29502 \
     --checkpoints_total_limit 5 \
     --dataloader_num_workers 2 \
     --checkpointing_steps 2000 \
+    --work_on_tmp_dir \
     --resume_from_checkpoint "latest"

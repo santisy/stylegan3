@@ -26,7 +26,7 @@ accelerate launch --main_process_port 29502 \
     --exp_id diff_1001_02 \
     --batch_size 32 \
     --encoder_decoder_network training_runs/en_0929_01/network-snapshot-002400.pkl \
-    --dataset datasets/lsunchurch_total \
+    --dataset datasets/lsunchurch_total.zip \
     --dim 256 \
     --sample_num 16 \
     --record_k 1 \
@@ -39,4 +39,5 @@ accelerate launch --main_process_port 29502 \
     --atten_layers '2,3,4' \
     --snap_k 320 \
     --sample_k 1280 \
+    --work_on_tmp_dir true \
     --resume training_runs/diff_1001_02/network-snapshot-2560.pkl

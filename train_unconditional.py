@@ -265,10 +265,6 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
 
 
 def main(args):
-    # Different seed for different rank (local rank)
-    rank_now = tdist.get_rank() if tdist.is_initialized() else 0
-    np.random.seed(rank_now)
-    torch.manual_seed(rank_now)
 
     if args.work_on_tmp_dir:
         tmp_dir = os.getenv("SLURM_TMPDIR")
@@ -279,13 +275,6 @@ def main(args):
     else:
         output_dir = args.output_dir
         dataset_path = args.train_data
-
-    if rank_now == 0 and args.work_on_tmp_dir and not os.path.exists(dataset_path):
-        print(f"\033[92mCopying dataset {args.train_data} to {tmp_dir} ...\033[00m")
-        os.system(f"cp {args.train_data} {new_data_root}") 
-        print("\033[92mFinished copying.\033[00m")
-    if tdist.is_initialized():
-        tdist.barrier()
 
     logging_dir = os.path.join(output_dir, args.logging_dir)
     eval_sample_dir = os.path.join(output_dir, 'eval_sample')
@@ -300,6 +289,18 @@ def main(args):
         project_config=accelerator_project_config,
         kwargs_handlers=[kwargs],
     )
+
+    # Different seed for different rank (local rank)
+    rank_now = tdist.get_rank() if tdist.is_initialized() else 0
+    np.random.seed(rank_now)
+    torch.manual_seed(rank_now)
+
+    if rank_now == 0 and args.work_on_tmp_dir and not os.path.exists(dataset_path):
+        print(f"\033[92mCopying dataset {args.train_data} to {tmp_dir} ...\033[00m")
+        os.system(f"cp {args.train_data} {new_data_root}") 
+        print("\033[92mFinished copying.\033[00m")
+    if tdist.is_initialized():
+        tdist.barrier()
 
     if args.logger == "tensorboard":
         if not is_tensorboard_available():
