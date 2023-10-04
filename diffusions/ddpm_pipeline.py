@@ -91,7 +91,9 @@ class DDPMPipeline(DiffusionPipeline):
         if class_condition:
             class_labels = torch.randint(0, class_dim, size=(batch_size,),
                                          generator=generator,
+                                         device=self.device
                                          ).to(self.device).long() + 1
+
         else:
             class_labels = None
 
