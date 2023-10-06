@@ -22,9 +22,12 @@ from training.training_loop import save_image_grid
 import torchvision.utils as tvu
 
 from utils.utils import delete_file
-from diffusions.dataset import Dataset
+from utils.utils import cast_device
+from training.dataset import ImageFolderDataset as Dataset
 from diffusions.decode import decode_nc
 from diffusions.contruct_trainer import construct_imagen_trainer
+from imagen_pytorch import ImagenTrainer
+from imagen_pytorch.trainer import cast_tuple
 
 # Disable tqdm globally
 from tqdm import tqdm
@@ -77,13 +80,22 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--only_load_model', type=bool, default=False, show_default=True)
 @click.option('--use_ddpm', type=bool, default=False, show_default=True)
 @click.option('--use_min_snr', type=bool, default=True, show_default=True)
+@click.option('--class_condition', type=bool, default=False, show_default=True)
+@click.option('--cond_scale', type=float, default=5, show_default=True)
+@click.option('--work_on_tmp_dir', type=bool, default=False)
+@click.option('--use_ema', type=bool, default=True, show_default=True)
+@click.option('--debug', type=bool, default=False, show_default=True)
 
 def train_diffusion(**kwargs):
 
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
 
     # Prepare folder and tensorboard
-    run_dir = os.path.join('training_runs', opts.exp_id)
+    if opts.work_on_tmp_dir:
+        tmp_dir = os.getenv("SLURM_TMPDIR")
+    else:
+        tmp_dir = ""
+    run_dir = os.path.join(tmp_dir, 'training_runs', opts.exp_id)
     os.makedirs(run_dir, exist_ok=True)
     import torch.utils.tensorboard as tensorboard
     stats_tfevents = tensorboard.SummaryWriter(run_dir)
@@ -94,13 +106,10 @@ def train_diffusion(**kwargs):
     with open(os.path.join(run_dir, 'config.json'), 'w') as f:
         json.dump(opts, f, indent=4)
     
-    use_kl_reg = None
     # The encoder decoder one
     with dnnlib.util.open_url(opts.encoder_decoder_network) as f:
         G = legacy.load_network_pkl(f)['G_ema'] # type: ignore
         G = G.eval()
-        use_kl_reg = G.use_kl_reg
-
 
     # Diffusion Unet Module and optimizer --------------------
     trainer = construct_imagen_trainer(G, opts, device=None, ckpt_path=opts.resume)
@@ -108,6 +117,21 @@ def train_diffusion(**kwargs):
 
 
     rank_now = tdist.get_rank() if tdist.is_initialized() else 0
+    world_size = tdist.get_world_size() if tdist.is_initialized() else 1
+    # Copy dataset if necessary
+    if opts.work_on_tmp_dir:
+        new_data_root = os.path.join(tmp_dir, "datasets")
+        os.makedirs(new_data_root, exist_ok=True)
+        dataset_path = os.path.join(new_data_root, os.path.basename(opts.dataset))
+    else:
+        dataset_path = opts.dataset
+    if rank_now == 0 and opts.work_on_tmp_dir and not os.path.exists(dataset_path):
+        print(f"\033[92mCopying dataset {opts.dataset} to {tmp_dir} ...\033[00m")
+        os.system(f"cp {opts.dataset} {new_data_root}") 
+        print("\033[92mFinished copying.\033[00m")
+    if tdist.is_initialized():
+        tdist.barrier()
+
     # Set randomness
     np.random.seed(rank_now)
     torch.manual_seed(rank_now)
@@ -115,19 +139,57 @@ def train_diffusion(**kwargs):
     torch.backends.cuda.matmul.allow_tf32 = False       # Improves numerical accuracy.
     torch.backends.cudnn.allow_tf32 = False             # Improves numerical accuracy.
 
-    # ------------------------------
+    # Dataset constructing and preparing ------------------------------
 
     # Dataset, sampler and iterator
-    dataset = Dataset(opts.dataset,
-                      dim=G.feat_coord_dim,
-                      size=opts.feat_spatial_size,
-                      use_kl_reg=use_kl_reg,
-                      noise_perturb=G.noise_perturb if not opts.no_noise_perturb else False,
-                      noise_perturb_sigma=G.noise_perturb_sigma,
-                      )
-    trainer.add_train_dataset(dataset,
-                              batch_size=opts.batch_size,
-                              shuffle=True)
+    # Add the collate_fn + encode part
+    dataset = Dataset(dataset_path,
+                      imagenet_flag=opts.class_condition)
+    # Collate fn
+    def collate_fn(batch_tuple):
+        img = torch.tensor(torch.stack([torch.tensor(x[0]) for x in batch_tuple], dim=0))
+        img = img.float() / 127.5 - 1.0
+        if not opts.class_condition:
+            label = None
+        else:
+            # Shift the label to +1
+            # Zero is the unconditional label
+            label = torch.stack([torch.tensor(x[1]) for x in batch_tuple]).flatten().long()
+            # Reuse the text condition here
+            label = label.unsqueeze(dim=1)
+        return img, label
+    # Contruct dataloader
+    train_dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=opts.batch_size,
+        shuffle=True,
+        num_workers=2,
+        prefetch_factor=2,
+        collate_fn=collate_fn
+    )
+    # Add dataloader
+    trainer.add_train_dataloader(train_dataloader)
+    # Redefine the `step_with_dl_iter` function
+    def step_with_dl_iter(self, dl_iter, **kwargs):
+        if opts.class_condition:
+            keywords_name = self.dl_tuple_output_keywords_names[:2]
+        else:
+            keywords_name = (self.dl_tuple_output_keywords_names[0],)
+        # Cast device in compatible with the `collate_fn`
+        dl_tuple_output = cast_device(cast_tuple(next(dl_iter)), self.device)
+        model_input = dict(list(zip(keywords_name, dl_tuple_output)))
+        with torch.no_grad():
+            model_input[keywords_name[0]] = (G.encode(dl_tuple_output[0])[0] - 0.5) * 2.0
+        if opts.class_condition:
+            label = model_input["text_embeds"]
+            model_input["text_embeds"] = self.imagen.unets[0].class_embedding_layer(label)
+        loss = self.forward(**{**kwargs, **model_input})
+        return loss    
+    # Rebind
+    trainer.step_with_dl_iter = step_with_dl_iter.__get__(trainer, ImagenTrainer)
+    # --------------------------------------------------
+
+    # Main process flag
     main_p_flag = trainer.accelerator.is_main_process
 
     # Counting initials
@@ -145,7 +207,7 @@ def train_diffusion(**kwargs):
         loss = trainer.train_step(unet_number = 1)
 
         # Increase couting
-        count += opts.batch_size
+        count += opts.batch_size * world_size
         global_step = count // 1000
 
         # Recording
@@ -165,10 +227,24 @@ def train_diffusion(**kwargs):
         # Sampling
         if count % (opts.sample_k * 1000) == 0 and main_p_flag:
             print('Save image ...')
-            sample_ni = trainer.sample(batch_size=opts.sample_num, use_tqdm=False)
+            # Get the label
+            if opts.class_condition:
+                label = torch.randint(0, 1000, size=(opts.sample_num, 1),
+                                      device=trainer.device).long()
+                class_embeds = trainer.ema_unets[0].class_embedding_layer(label)
+                cond_scale = opts.cond_scale
+            else:
+                class_embeds = None
+                cond_scale = 1.0
+
+            # Set random label
+            sample_ni = trainer.sample(batch_size=opts.sample_num,
+                                       text_embeds=class_embeds, # TODO
+                                       cond_scale=cond_scale,
+                                       use_tqdm=False)
             print('Value range of sampled nc: ', sample_ni.min(), sample_ni.max())
             print('Stats of sampled nc:', sample_ni.mean(), sample_ni.var())
-            sample_ni = torch.clip(sample_ni, 0, 1)
+            sample_ni = torch.clip((sample_ni + 1) / 2.0, 0, 1)
             with torch.no_grad():
                 sample_imgs = decode_nc(G, sample_ni).cpu().numpy()
             # Save image to local target folder
