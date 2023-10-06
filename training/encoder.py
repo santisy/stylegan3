@@ -490,7 +490,7 @@ class Decoder(nn.Module):
 
         # upsampling
         self.up = nn.ModuleList()
-        for i_level in reversed(range(self.num_resolutions)):
+        for i_level in range(self.num_resolutions):
             block = nn.ModuleList()
             attn = nn.ModuleList()
             block_out = max(ch // (2 ** (i_level + 1)), ch_min)
@@ -505,10 +505,10 @@ class Decoder(nn.Module):
             up = nn.Module()
             up.block = block
             up.attn = attn
-            if i_level != 0:
+            if i_level != self.num_resolutions - 1:
                 up.upsample = Upsample(block_in, resamp_with_conv)
                 #curr_res = curr_res * 2
-            self.up.insert(0, up) # prepend to get consistent order
+            self.up.append(up) # prepend to get consistent order
 
         # end
         self.norm_out = Normalize(block_in)
@@ -533,12 +533,12 @@ class Decoder(nn.Module):
         # h = self.mid.block_2(h, temb)
 
         # upsampling
-        for i_level in reversed(range(self.num_resolutions)):
+        for i_level in range(self.num_resolutions):
             for i_block in range(self.num_res_blocks+1):
                 h = self.up[i_level].block[i_block](h, temb)
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
-            if i_level != 0:
+            if i_level != self.num_resolutions - 1:
                 h = self.up[i_level].upsample(h)
 
         # end
@@ -550,6 +550,7 @@ class Decoder(nn.Module):
         h = self.conv_out(h)
         h = F.tanh(h)
         return h
+
 
 
 class VUNet(nn.Module):

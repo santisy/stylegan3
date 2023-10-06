@@ -122,11 +122,16 @@ def calc_flops_and_params(network_pkl: str,
     res_now = init_res
     dim_now = init_dim
 
+    hash_flops = 0
     # Rtrieve from hash encoder
     # 1) Trieve and interpolate
-    flops += (init_res * init_res * feat_coord_dim //feat_coord_dim_per_table  * (2 ** feat_coord_dim_per_table * 2) * level_dim) 
+    inter_flops = (init_res * init_res * feat_coord_dim //feat_coord_dim_per_table  * (2 ** (feat_coord_dim_per_table + 2)) * level_dim) * 16
+
     # 2) MLPs
-    flops += (init_res * init_res * ((level_dim * 16) ** 2 * 2 + level_dim * 16 * init_dim // feat_coord_dim) * feat_coord_dim)
+    mlp_flops = (init_res * init_res * ((level_dim * 16) ** 2 * 2 + level_dim * 16 * init_dim // feat_coord_dim) * feat_coord_dim)
+    hash_flops = inter_flops + mlp_flops
+    flops += hash_flops
+
 
     # StyleGAN synthesis layer flops
     while res_now <= out_res:
@@ -142,7 +147,18 @@ def calc_flops_and_params(network_pkl: str,
         dim_now = dim_now // 2
 
     gflops = flops / 1e9
+    hash_gflops = hash_flops / 1e9
+    inter_gflops = inter_flops / 1e9
+    mlp_gflops = mlp_flops / 1e9
+    print(f'\033[93mHash GFlops is {hash_gflops:.2f}\033[00m')
+    print(f'\033[93mInterpolation GFlops is {inter_gflops:.4f}\033[00m')
+    print(f'\033[93mMLP GFlops is {mlp_gflops:.4f}\033[00m')
     print(f'\033[93mGFlops is {gflops:.2f}\033[00m')
+
+    # Calculated Flops
+    input_dummy = (torch.randn(1, 512, 64, 64), [torch.randn(1, 512, 64, 64)])
+    flops = FlopCountAnalysis(G.synthesis_network, input_dummy)
+    print(f"\033[93mDecoder flops are {flops.total()/1e9}GFLops.\033[00m")
 
 
 if __name__ == '__main__':

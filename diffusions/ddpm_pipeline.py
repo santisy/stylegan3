@@ -3,7 +3,10 @@ from typing import List, Optional, Tuple, Union
 import torch
 
 from diffusers import DiffusionPipeline
-from diffusers.utils import randn_tensor
+try:
+    from diffusers.utils import randn_tensor
+except:
+    from diffusers.utils.torch_utils import randn_tensor
 
 class DDPMPipeline(DiffusionPipeline):
     r"""
