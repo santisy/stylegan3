@@ -240,7 +240,12 @@ def parse_args():
         "--class_condition", action="store_true"
     )
     parser.add_argument(
-        "--condition_scale", type=float, default=0.2
+        "--condition_scale", type=float, default=0.3,
+        help="Classifier free guidance scale."
+    )
+    parser.add_argument(
+        "--p_uncond", type=float, default=0.2,
+        help="Probability of unconditional training."
     )
     parser.add_argument(
         "--work_on_tmp_dir", action="store_true"
@@ -463,7 +468,8 @@ def main(args):
             # Shift the label to +1, Zero is the unconditional label
             label = torch.cat([torch.tensor(x[1]).reshape(1) for x in batch_tuple]).long() + 1
             # Randomly drop label to zero (null)
-            drop_idx = torch.randperm(label.shape[0])[:len(label)//2]
+            # Cond drop ratio is 0.1
+            drop_idx = torch.where(torch.rand(size=label.shape) < args.p_uncond)[0]
             label[drop_idx] = 0
         return img, label
 

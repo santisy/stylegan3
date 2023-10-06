@@ -81,7 +81,10 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--use_ddpm', type=bool, default=False, show_default=True)
 @click.option('--use_min_snr', type=bool, default=True, show_default=True)
 @click.option('--class_condition', type=bool, default=False, show_default=True)
+@click.option('--cond_scale', type=float, default=5, show_default=True)
 @click.option('--work_on_tmp_dir', type=bool, default=False)
+@click.option('--use_ema', type=bool, default=True, show_default=True)
+@click.option('--debug', type=bool, default=False, show_default=True)
 
 def train_diffusion(**kwargs):
 
@@ -151,10 +154,9 @@ def train_diffusion(**kwargs):
         else:
             # Shift the label to +1
             # Zero is the unconditional label
-            label = torch.cat([torch.tensor(x[1]) for x in batch_tuple]).flatten().long() + 1
-            # Randomly drop label to zero (null)
-            drop_idx = torch.randperm(len(label))[:len(label)//2]
-            label[drop_idx] = 0
+            label = torch.stack([torch.tensor(x[1]) for x in batch_tuple]).flatten().long()
+            # Reuse the text condition here
+            label = label.unsqueeze(dim=1)
         return img, label
     # Contruct dataloader
     train_dataloader = torch.utils.data.DataLoader(
@@ -178,6 +180,9 @@ def train_diffusion(**kwargs):
         model_input = dict(list(zip(keywords_name, dl_tuple_output)))
         with torch.no_grad():
             model_input[keywords_name[0]] = (G.encode(dl_tuple_output[0])[0] - 0.5) * 2.0
+        if opts.class_condition:
+            label = model_input["text_embeds"]
+            model_input["text_embeds"] = self.imagen.unets[0].class_embedding_layer(label)
         loss = self.forward(**{**kwargs, **model_input})
         return loss    
     # Rebind
@@ -222,7 +227,21 @@ def train_diffusion(**kwargs):
         # Sampling
         if count % (opts.sample_k * 1000) == 0 and main_p_flag:
             print('Save image ...')
-            sample_ni = trainer.sample(batch_size=opts.sample_num, use_tqdm=False)
+            # Get the label
+            if opts.class_condition:
+                label = torch.randint(0, 1000, size=(opts.sample_num, 1),
+                                      device=trainer.device).long()
+                class_embeds = trainer.ema_unets[0].class_embedding_layer(label)
+                cond_scale = opts.cond_scale
+            else:
+                class_embeds = None
+                cond_scale = 1.0
+
+            # Set random label
+            sample_ni = trainer.sample(batch_size=opts.sample_num,
+                                       text_embeds=class_embeds, # TODO
+                                       cond_scale=cond_scale,
+                                       use_tqdm=False)
             print('Value range of sampled nc: ', sample_ni.min(), sample_ni.max())
             print('Stats of sampled nc:', sample_ni.mean(), sample_ni.var())
             sample_ni = torch.clip((sample_ni + 1) / 2.0, 0, 1)

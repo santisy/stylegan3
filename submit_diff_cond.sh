@@ -2,7 +2,7 @@
 #SBATCH --time=71:00:0
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=32G
+#SBATCH --mem=48G
 #SBATCH --gres=gpu:a100:2
 #SBATCH --job-name="diff_1003_01"
 #SBATCH --output=./sbatch_logs/%j.log
@@ -27,14 +27,14 @@ accelerate launch --main_process_port 29502 \
     --train_data datasets/imagenet_train.zip \
     --output_dir training_runs/diff_1003_01 \
     --feat_spatial_size 64 \
-    --train_batch_size 48 \
+    --train_batch_size 96 \
     --num_epochs 200 \
     --save_model_epochs 1 \
-    --save_images_steps_k 1 \
+    --save_images_steps_k 8 \
     --learning_rate 1e-4 \
     --use_ema \
     --checkpoints_total_limit 5 \
     --dataloader_num_workers 2 \
-    --checkpointing_steps 2000 \
+    --checkpointing_steps 8000 \
     --work_on_tmp_dir \
     --class_condition
