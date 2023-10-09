@@ -65,7 +65,9 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--num_resnet_blocks', type=lambda x:[int(y) for y in x.split(',')],
               help='Number of residual blocks.',
               default='4,4,4,4', show_default=True)
-@click.option('--noise_scheduler', type=str, default='cosine')
+@click.option('--noise_scheduler',
+              type=click.Choice(['linear', 'cosine', 'chen_linear']),
+              default='cosine')
 @click.option('--no_noise_perturb', type=bool, default=False,
               help='Disable noise perturbation when tranining diffusion.')
 @click.option('--resume', type=str, default=None,
@@ -85,6 +87,7 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--work_on_tmp_dir', type=bool, default=False)
 @click.option('--use_ema', type=bool, default=True, show_default=True)
 @click.option('--debug', type=bool, default=False, show_default=True)
+@click.option('--mixed_precision', type=str, default="no", show_default=True)
 
 def train_diffusion(**kwargs):
 

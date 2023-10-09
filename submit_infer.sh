@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --time=71:00:0
+#SBATCH --time=11:00:0
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:a100:1
-#SBATCH --job-name="infer2_diff_1001_01"
+#SBATCH --job-name="infer1_diff_1001_01"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -22,12 +22,12 @@ source ~/.bashrc
 
 # !/bin/bash
 python infer_unconditional.py  \
-    --encoder_decoder_network training_runs/en_0925_01/network-snapshot-002400.pkl \
+    --encoder_decoder_network training_runs/en_0929_01/network-snapshot-002400.pkl \
     --exported_root exported \
     --output_dir training_runs/diff_1001_01 \
     --feat_spatial_size 64 \
     --batch_size 128 \
     --total_gen_nk 50 \
     --resume_from_checkpoint "latest" \
-    --seed_start 500 \
+    --seed_start 0 \
     --use_ema
