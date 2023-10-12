@@ -337,6 +337,8 @@ class MOVQDecoder(nn.Module):
         #self.levels_list[-1] += 1
 
     def forward(self, z, zq_list):
+        if isinstance(zq_list, list) and len(zq_list) == 1:
+            zq_list = zq_list[0]
         if isinstance(zq_list, torch.Tensor):
             zq_list = [zq_list,] * self.num_resolutions
 
