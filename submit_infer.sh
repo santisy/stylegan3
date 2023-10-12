@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:a100:1
-#SBATCH --job-name="infer1_diff_1001_01"
+#SBATCH --job-name="infer2_diff_1001_01"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -29,5 +29,5 @@ python infer_unconditional.py  \
     --batch_size 128 \
     --total_gen_nk 50 \
     --resume_from_checkpoint "latest" \
-    --seed_start 0 \
+    --seed_start 500 \
     --use_ema

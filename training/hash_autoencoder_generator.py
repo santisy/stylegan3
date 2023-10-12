@@ -296,7 +296,11 @@ class HashAutoGenerator(nn.Module):
 
         return None, None
 
-    def encode(self, img: torch.Tensor, key_codes = None):
+    def encode(self,
+               img: torch.Tensor,
+               key_codes = None,
+               no_noise_perturb=False,
+               **kwargs):
         mu, log_var = None, None
         if key_codes is not None:
             feat_coords = key_codes
@@ -308,7 +312,7 @@ class HashAutoGenerator(nn.Module):
             std = torch.exp(0.5 * log_var)
             feat_coords = F.sigmoid(torch.randn_like(std) * std + mu)
 
-        if self.noise_perturb:
+        if self.noise_perturb and not no_noise_perturb:
             feat_coords = torch.clip(
                     feat_coords  +
                     torch.randn_like(feat_coords) * self.noise_perturb_sigma,

@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:a100:1
-#SBATCH --job-name="en_0929_06"
+#SBATCH --job-name="en_1011_01"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -21,7 +21,7 @@ echo NPROCS=$NPROCS
 source ~/.bashrc
 
 # Running training jobs
-bash run.sh en_0929_06 1 16 ./datasets/imagenet_train.zip \
+bash run.sh en_1011_01 1 16 ./datasets/lsunchurch_for_stylegan.zip \
     --gamma=4 \
     --table_size_log2=18 \
     --level_dim=4 \
@@ -40,6 +40,5 @@ bash run.sh en_0929_06 1 16 ./datasets/imagenet_train.zip \
     --feat_coord_dim_per_table=1 \
     --num_downsamples=2 \
     --additional_decoder_conv=true \
-    --grid_type="hash" \
-    --use_kl_reg=true \
+    --grid_type="tiled" \
     --attn_resolutions 64

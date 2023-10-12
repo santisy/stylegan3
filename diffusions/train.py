@@ -182,7 +182,16 @@ def train_diffusion(**kwargs):
         dl_tuple_output = cast_device(cast_tuple(next(dl_iter)), self.device)
         model_input = dict(list(zip(keywords_name, dl_tuple_output)))
         with torch.no_grad():
-            model_input[keywords_name[0]] = (G.encode(dl_tuple_output[0])[0] - 0.5) * 2.0
+            img_ = dl_tuple_output[0]
+            encode_fn = getattr(G, "encode",
+                                lambda x, **kwargs: (G.img_encoder(x),))
+            try:
+                encoded = encode_fn(img_,
+                                        no_noise_perturb=opts.no_noise_perturb
+                                        )[0].detach()
+            except:
+                encoded = encode_fn(img_)[0].detach()
+            model_input[keywords_name[0]] = (encoded - 0.5) * 2.0
         if opts.class_condition:
             label = model_input["text_embeds"]
             model_input["text_embeds"] = self.imagen.unets[0].class_embedding_layer(label)
@@ -197,6 +206,7 @@ def train_diffusion(**kwargs):
 
     # Counting initials
     count = 0
+    iter_count = 0
     save_snapshot_list = []
     start_time = time.time()
     tick_end_time = None
@@ -211,6 +221,7 @@ def train_diffusion(**kwargs):
 
         # Increase couting
         count += opts.batch_size * world_size
+        iter_count += 1
         global_step = count // 1000
 
         # Recording
@@ -221,7 +232,7 @@ def train_diffusion(**kwargs):
             stats_tfevents.add_scalar('Progress/lr', cur_lr,
                                       global_step=global_step)
             tick_end_time = time.time()
-            print(f'Iters {count // opts.batch_size / 1000.: .2f}k\t'
+            print(f'Iters {iter_count / 1000.: .2f}k\t'
                   f'kimg {count // 1000}\t'
                   f'loss {loss:.4f}\t'
                   f'learning_rate {cur_lr: .6f}\t'

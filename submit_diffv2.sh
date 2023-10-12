@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:a100:2
-#SBATCH --job-name="diff_1008_01"
+#SBATCH --job-name="diff_1009_01"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -23,7 +23,7 @@ source ~/.bashrc
 # Running training jobs
 accelerate launch --main_process_port 29502 \
     diffusions/train.py \
-    --exp_id diff_1008_01 \
+    --exp_id diff_1009_01 \
     --batch_size 32 \
     --encoder_decoder_network training_runs/en_0929_01/network-snapshot-002400.pkl \
     --dataset datasets/lsunchurch_total.zip \
@@ -40,6 +40,6 @@ accelerate launch --main_process_port 29502 \
     --snap_k 320 \
     --sample_k 320 \
     --warmup_steps 10000 \
-    --noise_scheduler cosine \
-    --use_min_snr false \
+    --noise_scheduler chen_linear \
+    --use_min_snr true \
     --work_on_tmp_dir true

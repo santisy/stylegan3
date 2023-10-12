@@ -21,14 +21,14 @@ from huggingface_hub import HfFolder, Repository, create_repo, whoami
 from packaging import version
 from tqdm import tqdm
 from functools import partialmethod
-from functools import partial
 tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 from training.dataset import ImageFolderDataset as Dataset
 from diffusions.decode import decode_nc
 from training.training_loop import save_image_grid
 
 import diffusers
-from diffusers import DDPMScheduler, UNet2DModel
+from diffusions.ddpm_scheduler_custom import DDPMSchedulerCustom as DDPMScheduler
+from diffusers import UNet2DModel
 from diffusions.ddpm_pipeline import DDPMPipeline
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
@@ -249,6 +249,12 @@ def parse_args():
     )
     parser.add_argument(
         "--work_on_tmp_dir", action="store_true"
+    )
+    parser.add_argument(
+        "--min_snr_gamma", type=float, default=-1,
+    )
+    parser.add_argument(
+        "--no_noise_perturb", action="store_true"
     )
 
     args = parser.parse_args()
@@ -564,7 +570,14 @@ def main(args):
                 labels = None
             with torch.no_grad():
                 # `Clean feat coords`
-                clean_images = G.encode(image_input)[0].detach()
+                encode_fn = getattr(G, "encode",
+                                    lambda x, **kwargs: (G.img_encoder(x),))
+                try:
+                    clean_images = encode_fn(image_input,
+                                              no_noise_perturb=args.no_noise_perturb
+                                              )[0].detach()
+                except:
+                    clean_images = encode_fn(image_input)[0].detach()
                 clean_images = clean_images * 2.0 - 1.0
 
             # Sample noise that we'll add to the images
@@ -585,13 +598,25 @@ def main(args):
                 # Predict the noise residual
                 model_output = model(noisy_images, timesteps, class_labels=labels).sample
 
+                # Get snr
+                alpha_t = _extract_into_tensor(
+                    noise_scheduler.alphas_cumprod.to(timesteps.device),
+                    timesteps,
+                    (clean_images.shape[0], 1, 1, 1)
+                )
+                snr = alpha_t / (1 - alpha_t)
+
                 if args.prediction_type == "epsilon":
-                    loss = F.mse_loss(model_output, noise)  # this could have different weights!
+                    if args.min_snr_gamma > 0:
+                        snr_weights = snr.clamp_max(args.min_snr_gamma) / snr
+                        snr_weights = snr_weights.detach()
+                    else:
+                        snr_weights = 1.0
+                    loss = F.mse_loss(model_output, noise,
+                                      reduction="none") * snr_weights  # this could have different weights!
+                    loss = loss.mean()
                 elif args.prediction_type == "sample":
-                    alpha_t = _extract_into_tensor(
-                        noise_scheduler.alphas_cumprod, timesteps, (clean_images.shape[0], 1, 1, 1)
-                    )
-                    snr_weights = alpha_t / (1 - alpha_t)
+                    snr_weights = snr
                     loss = snr_weights * F.mse_loss(
                         model_output, clean_images, reduction="none"
                     )  # use SNR weighting from distillation paper

@@ -24,7 +24,8 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 from diffusions.decode import decode_nc
 
 import diffusers
-from diffusers import DDPMScheduler, UNet2DModel
+from diffusers import UNet2DModel
+from diffusions.ddpm_scheduler_custom import DDPMSchedulerCustom as DDPMScheduler
 from diffusions.ddpm_pipeline import DDPMPipeline
 from diffusers.training_utils import EMAModel
 from diffusers.utils.import_utils import is_xformers_available
