@@ -214,7 +214,8 @@ def prob_mask_like(shape, prob, device):
 
 @torch.jit.script
 def chen_linear_log_snr(t):
-    return torch.log((1 - t) / (t + 1e-4) + 1e-4)
+    t = torch.clip(t, 1e-6, 0.9999)
+    return torch.log((1 - t) / t)
 
 @torch.jit.script
 def beta_linear_log_snr(t):
