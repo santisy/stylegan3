@@ -254,7 +254,7 @@ def parse_args():
         "--min_snr_gamma", type=float, default=-1,
     )
     parser.add_argument(
-        "--no_noise_perturb", action="store_true"
+        "--no_noise_perturb", type=bool, default=True
     )
 
     args = parser.parse_args()
