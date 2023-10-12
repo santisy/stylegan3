@@ -81,7 +81,7 @@ def test_recon_main(
             # Collect metric
             lpips_collect[j, i] = loss_fn(img, rec).detach()
             psnr_collect[j, i] = psnr_fn(rec, img).detach()
-            ssim_collect[j, i] = ssim_fn(rec, img).aetach()
+            ssim_collect[j, i] = ssim_fn(rec, img).detach()
 
             # Save images (only save images at the first run)
             if j == 0 and ((max_save > 0 and count < max_save) or max_save < 0):

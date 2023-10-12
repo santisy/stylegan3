@@ -8,14 +8,16 @@
 
 """Streaming images and labels from datasets created with dataset_tool.py."""
 
+import io
 import os
 import cv2
 import numpy as np
-import zipfile
+#import zipfile
 import PIL.Image
 import json
 import torch
 import dnnlib
+from utils.parallelzipfile import ParallelZipFile as ZipFile
 
 try:
     import pyspng
@@ -171,10 +173,18 @@ class ImageFolderDataset(Dataset):
         path,                   # Path to directory or zip.
         resolution      = None, # Ensure specific resolution, None = highest available.
         split_val_n     = -1,   # Split the last n number image as the validation images
+        imagenet_flag   = False, # Construct the label according to imagenet file name
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._path = path
         self._zipfile = None
+        self.imagenet_flag = imagenet_flag
+        if imagenet_flag:
+            with open("datasets/imagenet_classes.json", "r") as f:
+                class_names = sorted(json.load(f))
+            self.imagenet_classes = dict(zip(class_names,
+                                             list(range(len(class_names)))))
+
 
         if os.path.isdir(self._path):
             self._type = 'dir'
@@ -187,6 +197,7 @@ class ImageFolderDataset(Dataset):
 
         PIL.Image.init()
         self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in PIL.Image.EXTENSION)
+        # Filter out wrongly added validation file
         if split_val_n > 0:
             self._image_fnames = self._image_fnames[:-split_val_n]
         if len(self._image_fnames) == 0:
@@ -205,14 +216,14 @@ class ImageFolderDataset(Dataset):
     def _get_zipfile(self):
         assert self._type == 'zip'
         if self._zipfile is None:
-            self._zipfile = zipfile.ZipFile(self._path)
+            self._zipfile = ZipFile(self._path)
         return self._zipfile
 
     def _open_file(self, fname):
         if self._type == 'dir':
             return open(os.path.join(self._path, fname), 'rb')
         if self._type == 'zip':
-            return self._get_zipfile().open(fname, 'r')
+            return io.BytesIO(self._get_zipfile().read(fname))
         return None
 
     def close(self):
@@ -231,11 +242,32 @@ class ImageFolderDataset(Dataset):
             if pyspng is not None and self._file_ext(fname) == '.png':
                 image = pyspng.load(f.read())
             else:
-                image = np.array(PIL.Image.open(f))
+                try:
+                    image = np.array(PIL.Image.open(f))
+                except:
+                    nparr = np.fromstring(f.read(), np.uint8) 
+                    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         if image.ndim == 2:
             image = image[:, :, np.newaxis] # HW => HWC
         image = image.transpose(2, 0, 1) # HWC => CHW
         return image
+
+    @property
+    def class_dim(self):
+        if self.imagenet_flag:
+            return len(self.imagenet_classes)
+        else:
+            return None
+
+    def get_label(self, idx):
+        label = self._get_raw_labels()[self._raw_idx[idx]]
+        if label.dtype == np.int64 and not self.imagenet_flag:
+            # When using imagenet flag we would not use one encoded label
+            onehot = np.zeros(self.label_shape, dtype=np.float32)
+            onehot[label] = 1
+            label = onehot
+        return label.copy()
 
     def _load_raw_labels(self):
         fname = 'dataset.json'
@@ -250,5 +282,25 @@ class ImageFolderDataset(Dataset):
         labels = np.array(labels)
         labels = labels.astype({1: np.int64, 2: np.float32}[labels.ndim])
         return labels
+
+    def _get_raw_labels(self):
+        if self._raw_labels is None:
+            if not self.imagenet_flag:
+                self._raw_labels = self._load_raw_labels() if self._use_labels else None
+                if self._raw_labels is None:
+                    self._raw_labels = np.zeros([self._raw_shape[0], 0], dtype=np.float32)
+                assert isinstance(self._raw_labels, np.ndarray)
+                assert self._raw_labels.shape[0] == self._raw_shape[0]
+                assert self._raw_labels.dtype in [np.float32, np.int64]
+                if self._raw_labels.dtype == np.int64:
+                    assert self._raw_labels.ndim == 1
+                    assert np.all(self._raw_labels >= 0)
+            else:
+                labels = []
+                for fname in self._image_fnames:
+                    class_str = fname.split("_")[0]
+                    labels.append(self.imagenet_classes[class_str]) 
+                self._raw_labels = np.array(labels)
+        return self._raw_labels
 
 #----------------------------------------------------------------------------

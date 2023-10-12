@@ -1,7 +1,8 @@
 """Recover diffusion trainer
 """
 from imagen_pytorch import Unet as Unet_Imagen
-from imagen_pytorch import Imagen, ImagenTrainer
+from imagen_pytorch import ImagenTrainer
+from diffusions.imagen_custom import Imagen
 from denoising_diffusion_pytorch import Unet as Unet_DDPM
 from denoising_diffusion_pytorch import GaussianDiffusion
 from diffusions.ddpm_trainer import Trainer
@@ -24,7 +25,9 @@ def construct_imagen_trainer(G, cfg, device=None, ckpt_path=None, test_flag=Fals
     use_ddpm = cfg.get('use_ddpm', False)
 
     if not use_ddpm:
+        class_embed_dim = 512
         unet = Unet_Imagen(dim=cfg.dim,
+                           text_embed_dim=class_embed_dim,
                            channels=G.feat_coord_dim,
                            dim_mults=dim_mults,
                            num_resnet_blocks=cfg.get('num_resnet_blocks', 3),
@@ -32,15 +35,17 @@ def construct_imagen_trainer(G, cfg, device=None, ckpt_path=None, test_flag=Fals
                                                        len(dim_mults)),
                            layer_cross_attns = False,
                            use_linear_attn = True,
-                           cond_on_text=False)
-
+                           cond_on_text = cfg.class_condition)
+        if cfg.class_condition:
+            unet.add_module("class_embedding_layer",
+                            nn.Embedding(1000, class_embed_dim))
         imagen = Imagen(
-                condition_on_text = False,
+                condition_on_text = cfg.class_condition,
                 unets = (unet, ),
                 image_sizes = (cfg.feat_spatial_size, ),
                 timesteps = 1000,
                 channels=G.feat_coord_dim,
-                auto_normalize_img=True,
+                auto_normalize_img=False,
                 min_snr_gamma=5,
                 min_snr_loss_weight=cfg.get('use_min_snr', True),
                 dynamic_thresholding=False,
@@ -49,11 +54,15 @@ def construct_imagen_trainer(G, cfg, device=None, ckpt_path=None, test_flag=Fals
                 loss_type='l2'
                 )
 
+        precision = None if cfg.mixed_precision == "no" else cfg.mixed_precision
+
         trainer = ImagenTrainer(imagen=imagen,
                                 imagen_checkpoint_path=None, # TODO: continue training
                                 lr=cfg.train_lr,
                                 cosine_decay_max_steps=cfg.cosine_decay_max_steps,  # Note I manually change the eta_min to 1e-5
-                                warmup_steps=cfg.warmup_steps
+                                warmup_steps=cfg.warmup_steps,
+                                use_ema=cfg.use_ema,
+                                precision=precision
                                 )
         if ckpt_path is not None:
             trainer.load(ckpt_path,

@@ -1,0 +1,7 @@
+datasets/
+exported/
+metrics_cache/
+training_runs/
+sbatch_logs/
+__pycache__/
+temp_imgs/

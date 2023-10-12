@@ -69,6 +69,7 @@ class HashAutoGenerator(nn.Module):
                  decoder_ch: int=128,
                  decoder_ch_mult=[1,2,4,4],
                  dual_connection: bool=False,
+                 grid_type: str='hash',
                  **kwargs):
         """
             Args:
@@ -173,6 +174,7 @@ class HashAutoGenerator(nn.Module):
         self.num_downsamples = num_downsamples
         self.unfold_k = unfold_k
         self.dual_connection = dual_connection
+        self.grid_type = grid_type
         assert unfold_k >= 1
 
         if no_concat_coord or unfold_k > 1:
@@ -230,7 +232,8 @@ class HashAutoGenerator(nn.Module):
                                             direct_coord_input=True,
                                             no_modulated_linear=False,
                                             one_hash_group=True,
-                                            fused_spatial=fused_spatial
+                                            fused_spatial=fused_spatial,
+                                            gridtype=grid_type
                                             ))
         dprint('Number of groups of hash tables is'
                f' {len(self.hash_encoder_list)}', color='g')
@@ -293,6 +296,31 @@ class HashAutoGenerator(nn.Module):
 
         return None, None
 
+    def encode(self,
+               img: torch.Tensor,
+               key_codes = None,
+               no_noise_perturb=False,
+               **kwargs):
+        mu, log_var = None, None
+        if key_codes is not None:
+            feat_coords = key_codes
+        elif not self.use_kl_reg:
+            feat_coords = self.img_encoder(img) # B x F_C_C x W x H
+        else:
+            mu, log_var = self.img_encoder(img)
+            log_var = torch.clamp(log_var, -30.0, 20.0)
+            std = torch.exp(0.5 * log_var)
+            feat_coords = F.sigmoid(torch.randn_like(std) * std + mu)
+
+        if self.noise_perturb and not no_noise_perturb:
+            feat_coords = torch.clip(
+                    feat_coords  +
+                    torch.randn_like(feat_coords) * self.noise_perturb_sigma,
+                    0, 1)
+
+        return feat_coords, mu, log_var
+        
+
     def synthesis(self,
                   s: torch.Tensor,
                   s2: torch.Tensor,
@@ -313,20 +341,7 @@ class HashAutoGenerator(nn.Module):
         b = img.size(0) if img is not None else key_codes.size(0)
         device = img.device if img is not None else key_codes.device
 
-        if key_codes is not None:
-            feats = key_codes
-        elif not self.use_kl_reg:
-            feat_coords = self.img_encoder(img) # B x F_C_C x W x H
-        else:
-            mu, log_var = self.img_encoder(img)
-            std = torch.exp(0.5 * log_var)
-            feat_coords = F.sigmoid(torch.randn_like(std) * std + mu)
-
-        if self.noise_perturb:
-            feat_coords = torch.clip(
-                    feat_coords  +
-                    torch.randn_like(feat_coords) * self.noise_perturb_sigma,
-                    0, 1)
+        feat_coords, mu, log_var = self.encode(img, key_codes)
 
         # Split the coordinates
         if self.expand_dim > 0:

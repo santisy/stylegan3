@@ -13,6 +13,7 @@ def decode_nc(G, nc):
     try:
         out = G.synthesis(None, None, None, key_codes=nc)
     except:
+        print("Not using class self `synthesis` function")
         b = nc.size(0)
         feat_coords = nc
 
