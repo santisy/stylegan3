@@ -36,10 +36,11 @@ class DDPMSchedulerCustom(DDPMScheduler):
                 torch.linspace(beta_start**0.5, beta_end**0.5, num_train_timesteps, dtype=torch.float32) ** 2
             )
         elif beta_schedule == "chen_linear":
+            # This is from the paper https://arxiv.org/abs/2301.10972
             t = torch.linspace(0, 1, num_train_timesteps + 1, dtype=torch.float32)
             alphas_cumprod = 1 - t
+            alphas_cumprod = torch.clip(alphas_cumprod, 1e-6, 0.9999)
             alphas = alphas_cumprod[1:] / alphas_cumprod[:-1]
-            # This is from the paper https://arxiv.org/abs/2301.10972
             self.betas = 1 - alphas
         elif beta_schedule == "squaredcos_cap_v2":
             # Glide cosine schedule
