@@ -213,9 +213,9 @@ def prob_mask_like(shape, prob, device):
 # large part of this was thanks to @crowsonkb at https://github.com/crowsonkb/v-diffusion-jax/blob/master/diffusion/utils.py
 
 @torch.jit.script
-def chen_linear_log_snr(t):
-    t = torch.clip(t, 1e-6, 0.9999)
-    return torch.log((1 - t) / t)
+def chen_linear_log_snr(t: torch.Tensor):
+    t = t.clamp_min_(1e-9)
+    return log((1 - t) / t)
 
 @torch.jit.script
 def beta_linear_log_snr(t):
