@@ -68,7 +68,7 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--noise_scheduler',
               type=click.Choice(['linear', 'cosine', 'chen_linear']),
               default='cosine')
-@click.option('--no_noise_perturb', type=bool, default=False,
+@click.option('--no_noise_perturb', type=bool, default=True,
               help='Disable noise perturbation when tranining diffusion.')
 @click.option('--resume', type=str, default=None,
               help='Resuming the training checkpoint.')
