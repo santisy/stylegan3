@@ -306,7 +306,7 @@ def main(args):
     np.random.seed(rank_now)
     torch.manual_seed(rank_now)
 
-    if rank_now == 0 and args.work_on_tmp_dir and not os.path.exists(dataset_path):
+    if accelerator.is_local_main_process and args.work_on_tmp_dir and not os.path.exists(dataset_path):
         print(f"\033[92mCopying dataset {args.train_data} to {tmp_dir} ...\033[00m")
         os.system(f"cp {args.train_data} {new_data_root}") 
         print("\033[92mFinished copying.\033[00m")

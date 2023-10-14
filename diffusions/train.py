@@ -121,6 +121,8 @@ def train_diffusion(**kwargs):
 
     rank_now = tdist.get_rank() if tdist.is_initialized() else 0
     world_size = tdist.get_world_size() if tdist.is_initialized() else 1
+    print(f"Rank now {rank_now}")
+    print(f"World size is {world_size}")
     # Copy dataset if necessary
     if opts.work_on_tmp_dir:
         new_data_root = os.path.join(tmp_dir, "datasets")
@@ -128,7 +130,7 @@ def train_diffusion(**kwargs):
         dataset_path = os.path.join(new_data_root, os.path.basename(opts.dataset))
     else:
         dataset_path = opts.dataset
-    if rank_now == 0 and opts.work_on_tmp_dir and not os.path.exists(dataset_path):
+    if trainer.accelerator.is_local_main_process and opts.work_on_tmp_dir and not os.path.exists(dataset_path):
         print(f"\033[92mCopying dataset {opts.dataset} to {tmp_dir} ...\033[00m")
         os.system(f"cp {opts.dataset} {new_data_root}") 
         print("\033[92mFinished copying.\033[00m")
