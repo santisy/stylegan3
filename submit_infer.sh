@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --time=71:00:0
+#SBATCH --time=11:00:0
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
@@ -22,7 +22,7 @@ source ~/.bashrc
 
 # !/bin/bash
 python infer_unconditional.py  \
-    --encoder_decoder_network training_runs/en_0925_01/network-snapshot-002400.pkl \
+    --encoder_decoder_network training_runs/en_0929_01/network-snapshot-002400.pkl \
     --exported_root exported \
     --output_dir training_runs/diff_1001_01 \
     --feat_spatial_size 64 \

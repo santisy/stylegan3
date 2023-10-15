@@ -1,7 +1,8 @@
 """Recover diffusion trainer
 """
 from imagen_pytorch import Unet as Unet_Imagen
-from imagen_pytorch import Imagen, ImagenTrainer
+from imagen_pytorch import ImagenTrainer
+from diffusions.imagen_custom import Imagen
 from denoising_diffusion_pytorch import Unet as Unet_DDPM
 from denoising_diffusion_pytorch import GaussianDiffusion
 from diffusions.ddpm_trainer import Trainer
@@ -53,12 +54,15 @@ def construct_imagen_trainer(G, cfg, device=None, ckpt_path=None, test_flag=Fals
                 loss_type='l2'
                 )
 
+        precision = None if cfg.mixed_precision == "no" else cfg.mixed_precision
+
         trainer = ImagenTrainer(imagen=imagen,
                                 imagen_checkpoint_path=None, # TODO: continue training
                                 lr=cfg.train_lr,
                                 cosine_decay_max_steps=cfg.cosine_decay_max_steps,  # Note I manually change the eta_min to 1e-5
                                 warmup_steps=cfg.warmup_steps,
                                 use_ema=cfg.use_ema,
+                                precision=precision
                                 )
         if ckpt_path is not None:
             trainer.load(ckpt_path,

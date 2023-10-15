@@ -2,9 +2,9 @@
 #SBATCH --time=71:00:0
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=48G
+#SBATCH --mem=64G
 #SBATCH --gres=gpu:a100:2
-#SBATCH --job-name="diff_1003_01"
+#SBATCH --job-name="diff_1010_01"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -25,9 +25,9 @@ accelerate launch --main_process_port 29502 \
     train_unconditional.py  \
     --encoder_decoder_network training_runs/en_0929_05/network-snapshot-002400.pkl \
     --train_data datasets/imagenet_train.zip \
-    --output_dir training_runs/diff_1003_01 \
+    --output_dir training_runs/diff_1010_01 \
     --feat_spatial_size 64 \
-    --train_batch_size 96 \
+    --train_batch_size 48 \
     --num_epochs 200 \
     --save_model_epochs 1 \
     --save_images_steps_k 8 \
@@ -37,4 +37,6 @@ accelerate launch --main_process_port 29502 \
     --dataloader_num_workers 2 \
     --checkpointing_steps 8000 \
     --work_on_tmp_dir \
+    --ddpm_beta_schedule chen_linear \
+    --min_snr_gamma 5 \
     --class_condition

@@ -65,8 +65,10 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--num_resnet_blocks', type=lambda x:[int(y) for y in x.split(',')],
               help='Number of residual blocks.',
               default='4,4,4,4', show_default=True)
-@click.option('--noise_scheduler', type=str, default='cosine')
-@click.option('--no_noise_perturb', type=bool, default=False,
+@click.option('--noise_scheduler',
+              type=click.Choice(['linear', 'cosine', 'chen_linear']),
+              default='cosine')
+@click.option('--no_noise_perturb', type=bool, default=True,
               help='Disable noise perturbation when tranining diffusion.')
 @click.option('--resume', type=str, default=None,
               help='Resuming the training checkpoint.')
@@ -85,6 +87,7 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--work_on_tmp_dir', type=bool, default=False)
 @click.option('--use_ema', type=bool, default=True, show_default=True)
 @click.option('--debug', type=bool, default=False, show_default=True)
+@click.option('--mixed_precision', type=str, default="no", show_default=True)
 
 def train_diffusion(**kwargs):
 
@@ -118,6 +121,8 @@ def train_diffusion(**kwargs):
 
     rank_now = tdist.get_rank() if tdist.is_initialized() else 0
     world_size = tdist.get_world_size() if tdist.is_initialized() else 1
+    print(f"Rank now {rank_now}")
+    print(f"World size is {world_size}")
     # Copy dataset if necessary
     if opts.work_on_tmp_dir:
         new_data_root = os.path.join(tmp_dir, "datasets")
@@ -125,7 +130,7 @@ def train_diffusion(**kwargs):
         dataset_path = os.path.join(new_data_root, os.path.basename(opts.dataset))
     else:
         dataset_path = opts.dataset
-    if rank_now == 0 and opts.work_on_tmp_dir and not os.path.exists(dataset_path):
+    if trainer.accelerator.is_local_main_process and opts.work_on_tmp_dir and not os.path.exists(dataset_path):
         print(f"\033[92mCopying dataset {opts.dataset} to {tmp_dir} ...\033[00m")
         os.system(f"cp {opts.dataset} {new_data_root}") 
         print("\033[92mFinished copying.\033[00m")
@@ -179,7 +184,16 @@ def train_diffusion(**kwargs):
         dl_tuple_output = cast_device(cast_tuple(next(dl_iter)), self.device)
         model_input = dict(list(zip(keywords_name, dl_tuple_output)))
         with torch.no_grad():
-            model_input[keywords_name[0]] = (G.encode(dl_tuple_output[0])[0] - 0.5) * 2.0
+            img_ = dl_tuple_output[0]
+            encode_fn = getattr(G, "encode",
+                                lambda x, **kwargs: (G.img_encoder(x),))
+            try:
+                encoded = encode_fn(img_,
+                                        no_noise_perturb=opts.no_noise_perturb
+                                        )[0].detach()
+            except:
+                encoded = encode_fn(img_)[0].detach()
+            model_input[keywords_name[0]] = (encoded - 0.5) * 2.0
         if opts.class_condition:
             label = model_input["text_embeds"]
             model_input["text_embeds"] = self.imagen.unets[0].class_embedding_layer(label)
@@ -194,6 +208,7 @@ def train_diffusion(**kwargs):
 
     # Counting initials
     count = 0
+    iter_count = 0
     save_snapshot_list = []
     start_time = time.time()
     tick_end_time = None
@@ -208,6 +223,7 @@ def train_diffusion(**kwargs):
 
         # Increase couting
         count += opts.batch_size * world_size
+        iter_count += 1
         global_step = count // 1000
 
         # Recording
@@ -218,7 +234,7 @@ def train_diffusion(**kwargs):
             stats_tfevents.add_scalar('Progress/lr', cur_lr,
                                       global_step=global_step)
             tick_end_time = time.time()
-            print(f'Iters {count // opts.batch_size / 1000.: .2f}k\t'
+            print(f'Iters {iter_count / 1000.: .2f}k\t'
                   f'kimg {count // 1000}\t'
                   f'loss {loss:.4f}\t'
                   f'learning_rate {cur_lr: .6f}\t'
