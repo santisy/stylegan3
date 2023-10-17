@@ -34,6 +34,7 @@ from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import is_tensorboard_available, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
+from utils.utils import copy_back_fn
 
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
@@ -256,6 +257,9 @@ def parse_args():
     parser.add_argument(
         "--no_noise_perturb", type=bool, default=True
     )
+    parser.add_argument(
+        "--copy_back", type=bool, default=False
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -276,6 +280,7 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
 
 
 def main(args):
+    copy_back_flag = args.work_on_tmp_dir and args.copy_back
 
     if args.work_on_tmp_dir:
         tmp_dir = os.getenv("SLURM_TMPDIR")
@@ -283,6 +288,10 @@ def main(args):
         new_data_root = os.path.join(tmp_dir, "datasets")
         os.makedirs(new_data_root, exist_ok=True)
         dataset_path = os.path.join(new_data_root, os.path.basename(args.train_data))
+        local_dir = args.output_dir
+        os.makedirs(local_dir, exist_ok=True)
+        local_eval_sample_dir = os.path.join(local_dir, 'eval_sample')
+        os.makedirs(local_eval_sample_dir, exist_ok=True)
     else:
         output_dir = args.output_dir
         dataset_path = args.train_data
@@ -662,6 +671,8 @@ def main(args):
 
                     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
                     accelerator.save_state(save_path)
+                    if copy_back_flag: 
+                        copy_back_fn(save_path, local_dir)
                     logger.info(f"Saved state to {save_path}")
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
@@ -698,12 +709,15 @@ def main(args):
                     with torch.no_grad():
                         sample_imgs = decode_nc(G, sample_ni).cpu().numpy()
                     # Save image to local target folder
+                    save_image_path = os.path.join(eval_sample_dir,
+                                                   f'fakes{(global_step + 1) // 1000:06d}.png')
                     save_image_grid(sample_imgs,
-                                    os.path.join(eval_sample_dir,
-                                                f'fakes{(global_step + 1) // 1000:06d}.png'),
+                                    save_image_path,
                                     drange=[-1,1],
                                     grid_size=(int(np.sqrt(args.eval_batch_size)),
                                             int(np.sqrt(args.eval_batch_size))))
+                    if copy_back_flag:
+                        copy_back_fn(save_image_path, local_eval_sample_dir)
                     if args.use_ema:
                         ema_model.restore(unet.parameters())
 
