@@ -76,7 +76,7 @@ def _measure_and_save(out_dir: str,
 @click.option('--network_diff', 'network_diff_pkl', type=str,
               help='Network pickle filename of diffusion unet.',
               default=None)
-@click.option('--diff_config', type=str, default=None)
+@click.option('--diff_config', type=str, default="./diff_config.json")
 @click.option('--input_folder', type=str,
               help='If given, will evaluate the images here.',
               default=None)
@@ -197,7 +197,7 @@ def main(**kwargs):
                 else:
                     sample_ni = diff_model.sample(batch_size=g_batch_size,
                                                   use_tqdm=False)
-                    sample_ni = torch.clip(sample_ni, 0, 1)
+                    sample_ni = torch.clip((sample_ni + 1.0) / 2.0, 0, 1)
                 if i == 0:
                     print(f'\033[92mThe sample result size is {sample_ni.shape}.\033[00m')
             with torch.no_grad():

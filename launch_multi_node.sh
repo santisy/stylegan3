@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-node=v100l:2
 #SBATCH --mem=64G
-#SBATCH --job-name="diff_1008_01"
+#SBATCH --job-name="diff_1016_01"
 #SBATCH --output=./sbatch_logs/%j.log
 
 echo "SLURM_JOBID="$SLURM_JOBID
