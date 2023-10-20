@@ -18,8 +18,9 @@ from diffusions.contruct_trainer import construct_imagen_trainer
 from diffusions.decode import decode_nc
 from diffusions.dpm_solver import DPM_Solver 
 from diffusions.dpm_solver import NoiseScheduleVP 
-from diffusions.dpm_solver import GaussianDiffusionContinuousTimes
-from diffusions.dpm_solver import log_snr_to_alpha_sigma
+from diffusions.dpm_solver import model_wrapper
+from diffusions.imagen_custom import GaussianDiffusionContinuousTimes
+from diffusions.imagen_custom import log_snr_to_alpha_sigma
 
 
 
@@ -164,13 +165,17 @@ def main(**kwargs):
         noise_scheduler = GaussianDiffusionContinuousTimes(
             noise_schedule=cfg.get('noise_scheduler', 'cosine'),
             timesteps=1000)
-        t = torch.linspace(1, 0, 1000 + 1, device=device)
+        t = torch.linspace(0, 1, 1000, device=device)
         log_snr = noise_scheduler.log_snr(t)
         alphas, _ = log_snr_to_alpha_sigma(log_snr)
         alphas_cumprod = (alphas * alphas).detach()
-        dpm_solver = DPM_Solver(diff_model.unets[0],
-                                NoiseScheduleVP(alphas_cumprod=alphas_cumprod),
-                                algorithm_type='dpmsolver')
+        noise_scheduler = NoiseScheduleVP(schedule='discrete',
+                                alphas_cumprod=alphas_cumprod)
+        wrapped_model = model_wrapper(diff_model.unets[0],
+                                      noise_scheduler)
+        dpm_solver = DPM_Solver(wrapped_model,
+                                noise_scheduler,
+                                algorithm_type="dpmsolver++")
     
 
     if not opts.skip_gen and opts.input_folder is None:
@@ -186,10 +191,11 @@ def main(**kwargs):
                                                     G.feat_coord_dim,
                                                     cfg.feat_spatial_size,
                                                     cfg.feat_spatial_size).to(device),
-                                        steps=100,
-                                        order=3,
-                                        skip_type="time_uniform",
+                                        steps=20,
+                                        order=2,
+                                        skip_type="logSNR",
                                         method="multistep",
+                                        denoise_to_zero=True
                                     )
                     sample_ni = (sample_ni + 1.0) / 2.0
                     print(sample_ni.max(), sample_ni.min())

@@ -18,9 +18,9 @@ accelerate launch \
     --machine_rank $SLURM_NODEID \
     --num_processes $(($SLURM_GPUS_PER_NODE*$SLURM_NNODES)) \
     diffusions/train.py \
-    --exp_id diff_1019_01 \
+    --exp_id diff_1019_02 \
     --batch_size 24 \
-    --encoder_decoder_network training_runs/en_0929_01/network-snapshot-002400.pkl \
+    --encoder_decoder_network training_runs/en_1011_01/network-snapshot-003807.pkl \
     --dataset datasets/lsunchurch_total.zip \
     --dim 256 \
     --sample_num 16 \

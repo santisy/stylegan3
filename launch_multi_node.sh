@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus-per-node=v100l:2
 #SBATCH --mem=64G
-#SBATCH --job-name="diff_1016_01"
+#SBATCH --job-name="real_1019_02"
 #SBATCH --output=./sbatch_logs/%j.log
 
 echo "SLURM_JOBID="$SLURM_JOBID
@@ -16,6 +16,6 @@ NPROCS=`srun --nodes=${SLURM_NNODES} bash -c 'hostname' | wc -l`
 echo NPROCS=$NPROCS
 
 export HEAD_NODE=$(hostname)
-export HEAD_NODE_PORT=29514
+export HEAD_NODE_PORT=29513
 
-chmod +x srun_diffv2.sh && srun srun_diffv2.sh
+chmod +x srun_diffv2_02.sh && srun srun_diffv2_02.sh

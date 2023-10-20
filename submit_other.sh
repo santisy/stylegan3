@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --time=47:00:0
+#SBATCH --time=1:00:0
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
 #SBATCH --job-name="imagenet_to_zip"
 #SBATCH --output=./sbatch_logs/%j.log
 
@@ -21,4 +21,4 @@ source ~/.bashrc
 
 # Running training jobs
 #cd datasets && python extract_imagenet.py
-cd datasets && zip -rq lsunchurch_total.zip lsunchurch_total
+cd metrics_cache && zip -rq diff_1016_02_16896.zip diff_1016_02_seed0 diff_1016_02_seed1 diff_1016_02_seed2 diff_1016_02_seed3

@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:v100l:1
-#SBATCH --job-name="infer1_diff_1008_01"
+#SBATCH --job-name="infer3_diff_1016_02"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -21,9 +21,9 @@ echo NPROCS=$NPROCS
 source ~/.bashrc
 python measure_gen_metrics.py \
     --real_data datasets/lsunchurch_for_stylegan/ \
-    --network_ae training_runs/en_0929_01/network-snapshot-002400.pkl \
-    --network_diff training_runs/diff_1008_01/network-snapshot-12000.pkl \
-    --exp_name diff_1008_01 \
-    --seed 1 \
-    --sample_total_img 5000 \
+    --network_ae training_runs/en_1011_01/network-snapshot-003807.pkl \
+    --network_diff training_runs/diff_1016_02/network-snapshot-19968.pkl \
+    --exp_name diff_1016_02 \
+    --seed 3 \
+    --sample_total_img 1280 \
     --generate_batch_size 64
