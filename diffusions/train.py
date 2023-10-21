@@ -68,7 +68,8 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
               help='Number of residual blocks.',
               default='4,4,4,4', show_default=True)
 @click.option('--noise_scheduler',
-              type=click.Choice(['linear', 'cosine', 'chen_linear']),
+              type=click.Choice(['linear', 'cosine', 'chen_linear',
+                                 'cosine_variant', 'cosine_variant_v2']),
               default='cosine')
 @click.option('--no_noise_perturb', type=bool, default=True,
               help='Disable noise perturbation when tranining diffusion.')
