@@ -241,9 +241,10 @@ def cast_device(batch_tuple, device):
     return tuple(out)
 
 
-def copy_back_fn(file_path:str, dst:str):
+def copy_back_fn(file_path:str, dst:str, isdir=False):
+    additional_flag = "-rf " if isdir else ""
     try:
-        result = subprocess.run(f"cp {file_path} {dst}",
+        result = subprocess.run(f"cp {additional_flag}{file_path} {dst}",
                                 shell=True,
                                 timeout=int(60 * 10))
         if result.returncode == 0:
