@@ -18,9 +18,9 @@ accelerate launch \
     --machine_rank $SLURM_NODEID \
     --num_processes $(($SLURM_GPUS_PER_NODE*$SLURM_NNODES)) \
     diffusions/train.py \
-    --exp_id diff_1019_01 \
-    --batch_size 24 \
-    --encoder_decoder_network training_runs/en_0929_01/network-snapshot-002400.pkl \
+    --exp_id diff_1019_03 \
+    --batch_size 32 \
+    --encoder_decoder_network training_runs/en_1011_01/network-snapshot-003607.pkl \
     --dataset datasets/lsunchurch_total.zip \
     --dim 256 \
     --sample_num 16 \
@@ -31,11 +31,11 @@ accelerate launch \
     --cosine_decay_max_steps 1000000 \
     --dim_mults '1,2,3,4' \
     --atten_layers '2,3,4' \
-    --snap_k 960 \
-    --sample_k 960 \
+    --snap_k 1280 \
+    --sample_k 1280 \
     --warmup_steps 10000 \
     --noise_scheduler cosine_variant \
-    --no_noise_perturb false \
+    --no_noise_perturb true \
     --use_min_snr false \
     --copy_back true \
     --work_on_tmp_dir true

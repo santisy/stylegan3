@@ -98,7 +98,7 @@ def train_diffusion(**kwargs):
 
     # Prepare folder and tensorboard
     if opts.work_on_tmp_dir:
-        tmp_dir = os.getenv("SLURM_TMPDIR")
+        tmp_dir = os.getenv("SLURM_TMPDIR", "")
     else:
         tmp_dir = ""
     local_dir = os.path.join('training_runs', opts.exp_id)

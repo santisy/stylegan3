@@ -672,7 +672,7 @@ def main(args):
                     save_path = os.path.join(output_dir, f"checkpoint-{global_step}")
                     accelerator.save_state(save_path)
                     if copy_back_flag: 
-                        copy_back_fn(save_path, local_dir)
+                        copy_back_fn(save_path, local_dir, isdir=True)
                     logger.info(f"Saved state to {save_path}")
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
