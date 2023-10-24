@@ -9,7 +9,6 @@ import json
 import math
 import os
 import sys
-import subprocess
 import time
 
 import numpy as np

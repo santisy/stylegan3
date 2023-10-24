@@ -81,6 +81,7 @@ def _measure_and_save(out_dir: str,
 @click.option('--input_folder', type=str,
               help='If given, will evaluate the images here.',
               default=None)
+@click.option('--only_gen', type=bool, default=False)
 @click.option('--every_k', type=int,
               help='If given, it will calculate fid and more every k images.',
               default=None)
@@ -219,9 +220,9 @@ def main(**kwargs):
                             img)
             pbar.update(1)
 
-            if (opts.every_k is not None and
-                (i + 1) * g_batch_size // (opts.every_k * 1000) > measure_k_count) or \
-                i == opts.sample_total_img // g_batch_size:
+            if (not opts.only_gen and ((opts.every_k is not None and
+                (i + 1) * g_batch_size // (opts.every_k * 1000) > measure_k_count) or 
+                i == opts.sample_total_img // g_batch_size)):
                 measure_k_count += 1
                 _measure_and_save(exported_out,
                                   opts.real_data,
