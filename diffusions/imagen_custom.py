@@ -251,6 +251,19 @@ def cosine_variant_log_snr_v2(t: torch.Tensor,
     logsnr = torch.log(output / (1 - output))
     return logsnr
 
+@torch.jit.script
+def cosine_variant_log_snr_v3(t: torch.Tensor,
+                              s: float = 0.05,
+                              e: float = 1.0,
+                              tau: float = 1.5):
+    v_start = math.cos(s * math.pi / 2.0) ** (2 * tau)
+    v_end = math.cos(e * math.pi / 2.0) ** (2 * tau)
+    output = torch.cos((t * (e - s) + s) * math.pi / 2) ** (2 * tau)
+    output = (v_end - output) / (v_end - v_start)
+    output = torch.clip(output, 1e-9, 9.999e-1)
+    logsnr = torch.log(output / (1 - output))
+    return logsnr
+
 def log_snr_to_alpha_sigma(log_snr):
     return torch.sqrt(torch.sigmoid(log_snr)), torch.sqrt(torch.sigmoid(-log_snr))
 
@@ -268,6 +281,8 @@ class GaussianDiffusionContinuousTimes(nn.Module):
             self.log_snr = cosine_variant_log_snr
         elif noise_schedule == "cosine_variant_v2":
             self.log_snr = cosine_variant_log_snr_v2
+        elif noise_schedule == "cosine_variant_v3":
+            self.log_snr = cosine_variant_log_snr_v3
         else:
             raise ValueError(f'invalid noise schedule {noise_schedule}')
 
