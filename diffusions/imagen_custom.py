@@ -253,9 +253,9 @@ def cosine_variant_log_snr_v2(t: torch.Tensor,
 
 @torch.jit.script
 def cosine_variant_log_snr_v3(t: torch.Tensor,
-                              s: float = 0.05,
+                              s: float = 0.01,
                               e: float = 1.0,
-                              tau: float = 1.5):
+                              tau: float = 2.0):
     v_start = math.cos(s * math.pi / 2.0) ** (2 * tau)
     v_end = math.cos(e * math.pi / 2.0) ** (2 * tau)
     output = torch.cos((t * (e - s) + s) * math.pi / 2) ** (2 * tau)
