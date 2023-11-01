@@ -69,7 +69,7 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--noise_scheduler',
               type=click.Choice(['linear', 'cosine', 'chen_linear',
                                  'cosine_variant', 'cosine_variant_v2',
-                                 'cosine_variant_v3']),
+                                 'cosine_variant_v3', 'cosine_variant_v4']),
               default='cosine')
 @click.option('--no_noise_perturb', type=bool, default=True,
               help='Disable noise perturbation when tranining diffusion.')
