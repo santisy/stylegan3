@@ -1,9 +1,10 @@
 #!/bin/bash
-#SBATCH --time=1:00:0
+#SBATCH --time=11:00:0
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --job-name="imagenet_to_zip"
+#SBATCH --gres=gpu:v100l:1
+#SBATCH --job-name="infer3_diff_1016_02"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -18,7 +19,11 @@ echo NPROCS=$NPROCS
 
 # Source the environment, load everything here
 source ~/.bashrc
-
-# Running training jobs
-#cd datasets && python extract_imagenet.py
-cd metrics_cache && zip -rq diff_1016_02_16896.zip diff_1016_02_seed0 diff_1016_02_seed1 diff_1016_02_seed2 diff_1016_02_seed3
+python measure_gen_metrics.py \
+    --real_data datasets/lsunchurch_for_stylegan/ \
+    --network_ae training_runs/en_1011_01/network-snapshot-003807.pkl \
+    --network_diff training_runs/diff_1016_02/network-snapshot-19968.pkl \
+    --exp_name diff_1016_02 \
+    --seed 3 \
+    --sample_total_img 1280 \
+    --generate_batch_size 64

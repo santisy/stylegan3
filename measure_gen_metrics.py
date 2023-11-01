@@ -18,8 +18,9 @@ from diffusions.contruct_trainer import construct_imagen_trainer
 from diffusions.decode import decode_nc
 from diffusions.dpm_solver import DPM_Solver 
 from diffusions.dpm_solver import NoiseScheduleVP 
-from diffusions.dpm_solver import GaussianDiffusionContinuousTimes
-from diffusions.dpm_solver import log_snr_to_alpha_sigma
+from diffusions.dpm_solver import model_wrapper
+from diffusions.imagen_custom import GaussianDiffusionContinuousTimes
+from diffusions.imagen_custom import log_snr_to_alpha_sigma
 
 
 
@@ -76,10 +77,11 @@ def _measure_and_save(out_dir: str,
 @click.option('--network_diff', 'network_diff_pkl', type=str,
               help='Network pickle filename of diffusion unet.',
               default=None)
-@click.option('--diff_config', type=str, default=None)
+@click.option('--diff_config', type=str, default="./diff_config.json")
 @click.option('--input_folder', type=str,
               help='If given, will evaluate the images here.',
               default=None)
+@click.option('--only_gen', type=bool, default=False)
 @click.option('--every_k', type=int,
               help='If given, it will calculate fid and more every k images.',
               default=None)
@@ -164,13 +166,17 @@ def main(**kwargs):
         noise_scheduler = GaussianDiffusionContinuousTimes(
             noise_schedule=cfg.get('noise_scheduler', 'cosine'),
             timesteps=1000)
-        t = torch.linspace(1, 0, 1000 + 1, device=device)
+        t = torch.linspace(0, 1, 1000, device=device)
         log_snr = noise_scheduler.log_snr(t)
         alphas, _ = log_snr_to_alpha_sigma(log_snr)
         alphas_cumprod = (alphas * alphas).detach()
-        dpm_solver = DPM_Solver(diff_model.unets[0],
-                                NoiseScheduleVP(alphas_cumprod=alphas_cumprod),
-                                algorithm_type='dpmsolver')
+        noise_scheduler = NoiseScheduleVP(schedule='discrete',
+                                alphas_cumprod=alphas_cumprod)
+        wrapped_model = model_wrapper(diff_model.unets[0],
+                                      noise_scheduler)
+        dpm_solver = DPM_Solver(wrapped_model,
+                                noise_scheduler,
+                                algorithm_type="dpmsolver++")
     
 
     if not opts.skip_gen and opts.input_folder is None:
@@ -186,10 +192,11 @@ def main(**kwargs):
                                                     G.feat_coord_dim,
                                                     cfg.feat_spatial_size,
                                                     cfg.feat_spatial_size).to(device),
-                                        steps=100,
-                                        order=3,
-                                        skip_type="time_uniform",
+                                        steps=20,
+                                        order=2,
+                                        skip_type="logSNR",
                                         method="multistep",
+                                        denoise_to_zero=True
                                     )
                     sample_ni = (sample_ni + 1.0) / 2.0
                     print(sample_ni.max(), sample_ni.min())
@@ -197,7 +204,7 @@ def main(**kwargs):
                 else:
                     sample_ni = diff_model.sample(batch_size=g_batch_size,
                                                   use_tqdm=False)
-                    sample_ni = torch.clip(sample_ni, 0, 1)
+                    sample_ni = torch.clip((sample_ni + 1.0) / 2.0, 0, 1)
                 if i == 0:
                     print(f'\033[92mThe sample result size is {sample_ni.shape}.\033[00m')
             with torch.no_grad():
@@ -213,9 +220,9 @@ def main(**kwargs):
                             img)
             pbar.update(1)
 
-            if (opts.every_k is not None and
-                (i + 1) * g_batch_size // (opts.every_k * 1000) > measure_k_count) or \
-                i == opts.sample_total_img // g_batch_size:
+            if (not opts.only_gen and ((opts.every_k is not None and
+                (i + 1) * g_batch_size // (opts.every_k * 1000) > measure_k_count) or 
+                i == opts.sample_total_img // g_batch_size)):
                 measure_k_count += 1
                 _measure_and_save(exported_out,
                                   opts.real_data,

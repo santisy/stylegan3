@@ -1,4 +1,7 @@
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from training.hash_autoencoder_generator import HashAutoGenerator
 from utils.utils import sample_coords
 
 __all__ = ['decode']
@@ -9,8 +12,33 @@ def decode_nc(G, nc):
             G: The encoder decoder network.
             nc: neural coordinates
     """
+    def encode(self,
+            img: torch.Tensor,
+            key_codes = None,
+            no_noise_perturb=False,
+            **kwargs):
+        mu, log_var = None, None
+        if key_codes is not None:
+            feat_coords = key_codes
+        elif not self.use_kl_reg:
+            feat_coords = self.img_encoder(img) # B x F_C_C x W x H
+        else:
+            mu, log_var = self.img_encoder(img)
+            log_var = torch.clamp(log_var, -30.0, 20.0)
+            std = torch.exp(0.5 * log_var)
+            feat_coords = F.sigmoid(torch.randn_like(std) * std + mu)
+
+        if self.noise_perturb and not no_noise_perturb and key_codes is None:
+            feat_coords = torch.clip(
+                    feat_coords  +
+                    torch.randn_like(feat_coords) * self.noise_perturb_sigma,
+                    0, 1)
+
+        return feat_coords, mu, log_var
 
     try:
+        # rebind the encode to fix the encode bug
+        G.encode = encode.__get__(G, HashAutoGenerator)
         out = G.synthesis(None, None, None, key_codes=nc)
     except:
         print("Not using class self `synthesis` function")

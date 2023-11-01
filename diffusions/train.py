@@ -23,6 +23,7 @@ import torchvision.utils as tvu
 
 from utils.utils import delete_file
 from utils.utils import cast_device
+from utils.utils import copy_back_fn
 from training.dataset import ImageFolderDataset as Dataset
 from diffusions.decode import decode_nc
 from diffusions.contruct_trainer import construct_imagen_trainer
@@ -66,7 +67,9 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
               help='Number of residual blocks.',
               default='4,4,4,4', show_default=True)
 @click.option('--noise_scheduler',
-              type=click.Choice(['linear', 'cosine', 'chen_linear']),
+              type=click.Choice(['linear', 'cosine', 'chen_linear',
+                                 'cosine_variant', 'cosine_variant_v2',
+                                 'cosine_variant_v3', 'cosine_variant_v4']),
               default='cosine')
 @click.option('--no_noise_perturb', type=bool, default=True,
               help='Disable noise perturbation when tranining diffusion.')
@@ -88,6 +91,7 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--use_ema', type=bool, default=True, show_default=True)
 @click.option('--debug', type=bool, default=False, show_default=True)
 @click.option('--mixed_precision', type=str, default="no", show_default=True)
+@click.option('--copy_back', type=bool, default=False, show_default=True)
 
 def train_diffusion(**kwargs):
 
@@ -95,9 +99,11 @@ def train_diffusion(**kwargs):
 
     # Prepare folder and tensorboard
     if opts.work_on_tmp_dir:
-        tmp_dir = os.getenv("SLURM_TMPDIR")
+        tmp_dir = os.getenv("SLURM_TMPDIR", "")
     else:
         tmp_dir = ""
+    local_dir = os.path.join('training_runs', opts.exp_id)
+    os.makedirs(local_dir, exist_ok=True)
     run_dir = os.path.join(tmp_dir, 'training_runs', opts.exp_id)
     os.makedirs(run_dir, exist_ok=True)
     import torch.utils.tensorboard as tensorboard
@@ -264,12 +270,15 @@ def train_diffusion(**kwargs):
             with torch.no_grad():
                 sample_imgs = decode_nc(G, sample_ni).cpu().numpy()
             # Save image to local target folder
+            save_image_path = os.path.join(run_dir,
+                                           f'fakes{global_step:06d}.png')
             save_image_grid(sample_imgs,
-                            os.path.join(run_dir,
-                                         f'fakes{global_step:06d}.png'),
+                            save_image_path,
                             drange=[-1,1],
                             grid_size=(int(np.sqrt(opts.sample_num)),
                                        int(np.sqrt(opts.sample_num))))
+            if opts.copy_back:
+                copy_back_fn(save_image_path, local_dir)
             # Save image to tensorboard
             stats_tfevents.add_image(f'fake', tvu.make_grid(
                 torch.tensor(sample_imgs[:16]),
@@ -284,6 +293,9 @@ def train_diffusion(**kwargs):
             save_file = os.path.join(run_dir, f'network-snapshot-{global_step}.pkl')
             save_snapshot_list.append(save_file)
             trainer.save(save_file) # Here is a waiting for everyone!
+
+            if opts.copy_back and main_p_flag:
+                copy_back_fn(save_file, local_dir)
             if len(save_snapshot_list) > 5 and main_p_flag:
                 delete_file(save_snapshot_list.pop(0))
 

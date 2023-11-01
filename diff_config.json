@@ -1,0 +1,44 @@
+{
+    "exp_id": "diff_1008_01",
+    "batch_size": 32,
+    "encoder_decoder_network": "training_runs/en_0929_01/network-snapshot-002400.pkl",
+    "dataset": "datasets/lsunchurch_total.zip",
+    "dim": 256,
+    "sample_num": 16,
+    "record_k": 1,
+    "train_lr": 8e-05,
+    "feat_spatial_size": 64,
+    "num_resnet_blocks": [
+        2,
+        2,
+        2,
+        2
+    ],
+    "no_noise_perturb": true,
+    "cosine_decay_max_steps": 1000000,
+    "dim_mults": [
+        1,
+        2,
+        3,
+        4
+    ],
+    "atten_layers": [
+        2,
+        3,
+        4
+    ],
+    "snap_k": 320,
+    "sample_k": 320,
+    "warmup_steps": 10000,
+    "noise_scheduler": "chen_linear",
+    "use_min_snr": false,
+    "work_on_tmp_dir": true,
+    "resume": null,
+    "only_load_model": false,
+    "use_ddpm": false,
+    "class_condition": false,
+    "cond_scale": 5.0,
+    "use_ema": true,
+    "debug": false,
+    "mixed_precision": "no"
+}
