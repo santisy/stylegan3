@@ -11,6 +11,7 @@ import time
 
 import numpy as np
 import cupy as cp
+import PIL
 from PIL import Image
 
 try:
@@ -39,7 +40,7 @@ from utils.simple_dataset import SimpleDatasetForMetric
 Manifold = namedtuple('Manifold', ['features', 'radii'])
 PrecisionAndRecall = namedtuple('PrecisinoAndRecall', ['precision', 'recall'])
 
-PR_PROCESS_NUM = int(os.getenv('PR_PROCESS_NUM', 16))
+PR_PROCESS_NUM = int(os.getenv('PR_PROCESS_NUM', 4))
 
 
 class IPR():
@@ -334,7 +335,7 @@ def realism(manifold_real, feat_subject):
 
 class ZipDataset(SimpleDatasetForMetric):
     def __init__(self, root, transform=None):
-        super().__init__(root)
+        super().__init__(root, torch.device('cpu'))
         # self.fnames = list(map(lambda x: os.path.join(root, x), os.listdir(root)))
         print(f'\033[92mIterating path {root} with {self.data_len} \033[00m')
         self.transform = transform
@@ -342,7 +343,7 @@ class ZipDataset(SimpleDatasetForMetric):
     def __getitem__(self, index):
         fname = self._image_fnames[index]
         with self._open_file(fname) as f:
-            image = np.array(PIL.Image.open(f).convert('RGB'))
+            image = PIL.Image.open(f).convert('RGB')
         if self.transform is not None:
             image = self.transform(image)
         return image
@@ -405,7 +406,8 @@ def get_custom_loader(image_dir_or_fnames, image_size=224, batch_size=50, num_wo
                              batch_size=batch_size,
                              shuffle=False,
                              num_workers=num_workers,
-                             pin_memory=True)
+                             pin_memory=False,
+                             multiprocessing_context="fork")
     return data_loader
 
 
@@ -478,3 +480,11 @@ if __name__ == '__main__':
 
     print('precision:', precision)
     print('recall:', recall)
+
+    f = open(os.path.join("metrics_cache",
+                          f"{os.path.basename(args.path_fake)}_precision_recall.txt"),
+                          'a')
+    f.write(f"real data: {args.path_real}\n")
+    f.write(f"fake data: {args.path_fake}\n")
+    f.write(f"precision: {precision}")
+    f.write(f"recall: {recall}")
