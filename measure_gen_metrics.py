@@ -21,6 +21,7 @@ from diffusions.dpm_solver import NoiseScheduleVP
 from diffusions.dpm_solver import model_wrapper
 from diffusions.imagen_custom import GaussianDiffusionContinuousTimes
 from diffusions.imagen_custom import log_snr_to_alpha_sigma
+from utils.simple_dataset import SimpleDatasetForMetric
 
 
 
@@ -35,7 +36,7 @@ def _measure_and_save(out_dir: str,
                       fid_version: str='fid'):
     print(f'\033[093mEvaluation on {eval_num/1000:.2f}k image.\033[00m')
     f = open(os.path.join(METRIC_ROOT, f'{exp_name}_metric_result.txt'), 'a')
-    f.write(f'{eval_num}k img evaluation results:\n')
+    f.write(f'{eval_num/1000:.2f}k img evaluation results:\n')
     if fid_version == 'fid':
         # Calculate
         metric_dict = torch_fidelity.calculate_metrics(
@@ -234,8 +235,12 @@ def main(**kwargs):
 
         pbar.close()
     else:
-        total_num = len(glob.glob(os.path.join(exported_out, "**", "*.png"),
-                                  recursive=True))
+        if exported_out.endswith(".zip"):
+            exported_out = SimpleDatasetForMetric(exported_out, device)
+            total_num = len(exported_out)
+        else:
+            total_num = len(glob.glob(os.path.join(exported_out, "**", "*.png"),
+                                    recursive=True))
         print('\033[93m[WARNING] Skipping the generation process.\033[00m')
 
         _measure_and_save(exported_out,
