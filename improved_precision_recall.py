@@ -33,6 +33,9 @@ import torchvision.models as models
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
+
+from utils.simple_dataset import SimpleDatasetForMetric
+
 Manifold = namedtuple('Manifold', ['features', 'radii'])
 PrecisionAndRecall = namedtuple('PrecisinoAndRecall', ['precision', 'recall'])
 
@@ -329,6 +332,20 @@ def realism(manifold_real, feat_subject):
     max_realism = float(ratios.max())
     return max_realism
 
+class ZipDataset(SimpleDatasetForMetric):
+    def __init__(self, root, transform=None):
+        super().__init__(root)
+        # self.fnames = list(map(lambda x: os.path.join(root, x), os.listdir(root)))
+        print(f'\033[92mIterating path {root} with {self.data_len} \033[00m')
+        self.transform = transform
+
+    def __getitem__(self, index):
+        fname = self._image_fnames[index]
+        with self._open_file(fname) as f:
+            image = np.array(PIL.Image.open(f).convert('RGB'))
+        if self.transform is not None:
+            image = self.transform(image)
+        return image
 
 class ImageFolder(Dataset):
     def __init__(self, root, transform=None):
@@ -375,7 +392,10 @@ def get_custom_loader(image_dir_or_fnames, image_size=224, batch_size=50, num_wo
     if isinstance(image_dir_or_fnames, list):
         dataset = FileNames(image_dir_or_fnames, transform)
     elif isinstance(image_dir_or_fnames, str):
-        dataset = ImageFolder(image_dir_or_fnames, transform=transform)
+        if image_dir_or_fnames.endswith(".zip"):
+            dataset = ZipDataset(image_dir_or_fnames, transform=transform)
+        else:
+            dataset = ImageFolder(image_dir_or_fnames, transform=transform)
     else:
         raise TypeError
 
