@@ -1,11 +1,14 @@
 """Simple dataset for iterating the images
 """
+import io
 import os
 import zipfile
+from utils.parallelzipfile import ParallelZipFile as ZipFile
 
 import PIL.Image
 import numpy as np
 import torch
+import torchvision.transforms.functional as F
 
 __all__ = ['SimpleDataset', 'SimpleDatasetForMetric']
 
@@ -104,11 +107,11 @@ class SimpleDatasetForMetric(torch.utils.data.Dataset):
 
     def _get_zipfile(self):
         if self._zipfile is None:
-            self._zipfile = zipfile.ZipFile(self._data_path)
+            self._zipfile = ZipFile(self._data_path)
         return self._zipfile
 
     def _open_file(self, fname):
-        return self._get_zipfile().open(fname, 'r')
+        return io.BytesIO(self._get_zipfile().read(fname))
 
     def __len__(self):
         return self.data_len
@@ -116,7 +119,6 @@ class SimpleDatasetForMetric(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         fname = self._image_fnames[idx]
         with self._open_file(fname) as f:
-            image = np.array(PIL.Image.open(f))
-        image = image.transpose(2, 0, 1)
-        img_tensor = torch.from_numpy(image.copy())
-        return img_tensor
+            image = PIL.Image.open(f).convert('RGB')
+        image = F.pil_to_tensor(image)
+        return image
