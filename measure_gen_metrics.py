@@ -21,6 +21,7 @@ from diffusions.dpm_solver import NoiseScheduleVP
 from diffusions.dpm_solver import model_wrapper
 from diffusions.imagen_custom import GaussianDiffusionContinuousTimes
 from diffusions.imagen_custom import log_snr_to_alpha_sigma
+from utils.simple_dataset import SimpleDatasetForMetric
 
 
 
@@ -234,8 +235,12 @@ def main(**kwargs):
 
         pbar.close()
     else:
-        total_num = len(glob.glob(os.path.join(exported_out, "**", "*.png"),
-                                  recursive=True))
+        if exported_out.endswith(".zip"):
+            exported_out = SimpleDatasetForMetric(exported_out, device)
+            total_num = len(exported_out)
+        else:
+            total_num = len(glob.glob(os.path.join(exported_out, "**", "*.png"),
+                                    recursive=True))
         print('\033[93m[WARNING] Skipping the generation process.\033[00m')
 
         _measure_and_save(exported_out,
