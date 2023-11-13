@@ -334,8 +334,8 @@ def realism(manifold_real, feat_subject):
     return max_realism
 
 class ZipDataset(SimpleDatasetForMetric):
-    def __init__(self, root, transform=None):
-        super().__init__(root, torch.device('cpu'))
+    def __init__(self, root, transform=None, num_samples=-1):
+        super().__init__(root, torch.device('cpu'), max_num=num_samples)
         # self.fnames = list(map(lambda x: os.path.join(root, x), os.listdir(root)))
         print(f'\033[92mIterating path {root} with {self.data_len} \033[00m')
         self.transform = transform
@@ -394,13 +394,15 @@ def get_custom_loader(image_dir_or_fnames, image_size=224, batch_size=50, num_wo
         dataset = FileNames(image_dir_or_fnames, transform)
     elif isinstance(image_dir_or_fnames, str):
         if image_dir_or_fnames.endswith(".zip"):
-            dataset = ZipDataset(image_dir_or_fnames, transform=transform)
+            dataset = ZipDataset(image_dir_or_fnames,
+                                 transform=transform,
+                                 num_samples=num_samples)
         else:
             dataset = ImageFolder(image_dir_or_fnames, transform=transform)
     else:
         raise TypeError
 
-    if num_samples > 0:
+    if num_samples > 0 and not image_dir_or_fnames.endswith(".zip"):
         dataset.fnames = dataset.fnames[:num_samples]
     data_loader = DataLoader(dataset=dataset,
                              batch_size=batch_size,
