@@ -155,10 +155,10 @@ def calc_flops_and_params(network_pkl: str,
     print(f'\033[93mMLP GFlops is {mlp_gflops:.4f}\033[00m')
     print(f'\033[93mGFlops is {gflops:.2f}\033[00m')
 
-    # Calculated Flops
-    input_dummy = (torch.randn(1, 512, 64, 64), [torch.randn(1, 512, 64, 64)])
-    flops = FlopCountAnalysis(G.synthesis_network, input_dummy)
-    print(f"\033[93mDecoder flops are {flops.total()/1e9}GFLops.\033[00m")
+    ## Calculated Flops
+    #input_dummy = (torch.randn(1, 512, 64, 64), [torch.randn(1, 512, 64, 64)])
+    #flops = FlopCountAnalysis(G.synthesis_network, input_dummy)
+    #print(f"\033[93mDecoder flops are {flops.total()/1e9}GFLops.\033[00m")
 
 
 if __name__ == '__main__':

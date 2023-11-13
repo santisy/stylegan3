@@ -236,7 +236,8 @@ def main(**kwargs):
         pbar.close()
     else:
         if exported_out.endswith(".zip"):
-            exported_out = SimpleDatasetForMetric(exported_out, device)
+            exported_out = SimpleDatasetForMetric(exported_out, device,
+                                                  max_num=opts.sample_total_img)
             total_num = len(exported_out)
         else:
             total_num = len(glob.glob(os.path.join(exported_out, "**", "*.png"),

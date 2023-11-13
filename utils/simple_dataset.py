@@ -81,7 +81,8 @@ class SimpleDataset:
 class SimpleDatasetForMetric(torch.utils.data.Dataset):
     def __init__(self,
                  dataset: str,
-                 device: torch.device):
+                 device: torch.device,
+                 max_num: int=-1):
         """
             Simple dataset to extract the images from zip file and return a 
             batch size 1 CUDA tensor (uint8 as required for FID calculation).
@@ -98,6 +99,8 @@ class SimpleDatasetForMetric(torch.utils.data.Dataset):
         self._image_fnames = sorted(fname for fname in self._all_fnames
                                     if self._file_ext(fname)
                                     in PIL.Image.EXTENSION)
+        if max_num > 0:
+            self._image_fnames = self._image_fnames[:max_num]
         self.data_len = len(self._image_fnames)
         self.device = device
 
