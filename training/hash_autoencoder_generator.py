@@ -10,10 +10,10 @@ import torch.nn.functional as F
 from torch_utils import persistence
 from gridencoder import GridEncoder
 from training.networks_stylegan2 import SynthesisNetworkFromHash
-from training.networks_stylegan2 import SynthesisLayer
 from training.movq_module import MOVQDecoder
 from training.encoder import Encoder
 from training.encoder import Decoder as VQDecoder
+from encoder_xl import STEncoder
 from utils.utils import itertools_combinations
 from utils.utils import pos_encodings
 from utils.utils import sample_coords
@@ -70,6 +70,7 @@ class HashAutoGenerator(nn.Module):
                  decoder_ch_mult=[1,2,4,4],
                  dual_connection: bool=False,
                  grid_type: str='hash',
+                 swin_transformer_encoder: bool=False,
                  **kwargs):
         """
             Args:
@@ -150,6 +151,8 @@ class HashAutoGenerator(nn.Module):
                     (default: [1, 2, 4, 4])
                 dual_connection: Dual connection to the key codes.
                     (default: False)
+                swin_transformer_encoder: Swin transformer encoder
+                    (default: False)
         """
 
         super().__init__()
@@ -204,15 +207,20 @@ class HashAutoGenerator(nn.Module):
                     np.arange(feat_coord_dim), feat_coord_dim_per_table)).long()
                 self.register_buffer('group_of_key_codes', group_of_key_codes)
 
-        self.img_encoder = Encoder(feat_coord_dim=feat_coord_dim,
-                                   ch=encoder_ch,
-                                   max_ch=512,
-                                   num_res_blocks=encoder_resnet_num,
-                                   num_downsamples=num_downsamples,
-                                   resolution=res_max,
-                                   use_kl_reg=use_kl_reg,
-                                   attn_resolutions=attn_resolutions
-                                   )
+        if not swin_transformer_encoder:
+            self.img_encoder = Encoder(feat_coord_dim=feat_coord_dim,
+                                    ch=encoder_ch,
+                                    max_ch=512,
+                                    num_res_blocks=encoder_resnet_num,
+                                    num_downsamples=num_downsamples,
+                                    resolution=res_max,
+                                    use_kl_reg=use_kl_reg,
+                                    attn_resolutions=attn_resolutions
+                                    )
+        else:
+            self.img_encoder = STEncoder(out_dim=feat_coord_dim,
+                                         embed_dim=encoder_ch,
+                                         num_downsamples=num_downsamples)
 
         self.hash_encoder_list = nn.ModuleList()
         for _ in range(self.hash_encoder_num):
