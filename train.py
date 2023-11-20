@@ -227,7 +227,6 @@ def parse_comma_separated_list(s):
 @click.option('--encoder_ch', help='Encoder unit channel number.',                              type=int, default=32, show_default=True)
 @click.option('--movq_decoder', help='Modulated VQ decoder',                                    type=bool, default=False, show_default=True)
 @click.option('--encoder_resnet_num', help='The number of resnet layers.',                      type=int, default=2, show_default=False)
-@click.option('--hash_resolution',    help='Force set hash table maximum resolution.',          type=int, default=-1, show_default=False)
 @click.option('--no_concat_coord', help='Do not concate spatial coordinates.',                  type=bool, default=False, show_default=True)
 @click.option('--local_coords',     help='Concat local coordinates.',                           type=bool, default=False, show_default=True)
 @click.option('--combine_coords',    help='Combine spatial coordinates to one dimension.',      type=bool, default=False, show_default=True)
@@ -239,6 +238,11 @@ def parse_comma_separated_list(s):
 @click.option('--decoder_ch_mult', help='The mulitplication factor of decoder',                    
               type=lambda x: [int(y) for y in x.split(',')] if x is not None else None, default='1,2,4,4', show_default=True)
 @click.option('--dual_connection', help='Key codes also connect to the features.',              type=bool, default=False, show_default=True)
+
+# XL settings
+@click.option('--hash_resolution',    help='Force set hash table maximum resolution.',          type=int, default=-1, show_default=True)
+@click.option('--swin_transformer_encoder', help='Whether to use swin transformer as encoder',  type=bool, defaul=False, show_default=True)
+
 
 
 def main(**kwargs):
@@ -329,7 +333,8 @@ def main(**kwargs):
                                  decoder_ch=opts.decoder_ch,
                                  decoder_ch_mult=opts.decoder_ch_mult,
                                  dual_connection=opts.dual_connection,
-                                 grid_type=opts.grid_type
+                                 grid_type=opts.grid_type,
+                                 swin_transformer_encoder=opts.swin_transformer_encoder
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)

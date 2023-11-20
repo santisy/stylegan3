@@ -305,8 +305,6 @@ def training_loop(
                                           cur_nimg=cur_nimg,
                                           cur_tick=batch_idx,
                                           )
-            print(G.prof.key_averages().table(row_limit=10))
-            import pdb; pdb.set_trace()
             phase.module.requires_grad_(False)
 
             # Update weights.
