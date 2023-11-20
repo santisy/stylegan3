@@ -9,6 +9,8 @@ import numpy as np
 from typing import Optional
 import dnnlib
 import legacy
+import sys
+sys.path.insert(0, '.')
 
 import accelerate
 import torch
