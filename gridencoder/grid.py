@@ -333,8 +333,8 @@ class GridEncoder(nn.Module):
                               inputs.requires_grad,
                               self.gridtype_id,
                               self.align_corners,
-                              self.res_multiplier,
-                              self.feat_coord_dim)
+                              getattr(self, "res_multiplier", 1),
+                              getattr(self, "feat_coord_dim", 1))
         outputs = outputs.view(prefix_shape + [self.hash_out_dim])
 
         # This original outputs is the hash retrieve outpout before 
