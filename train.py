@@ -241,7 +241,7 @@ def parse_comma_separated_list(s):
 
 # XL settings
 @click.option('--hash_resolution',    help='Force set hash table maximum resolution.',          type=int, default=-1, show_default=True)
-@click.option('--swin_transformer_encoder', help='Whether to use swin transformer as encoder',  type=bool, defaul=False, show_default=True)
+@click.option('--swin_transformer_encoder', help='Whether to use swin transformer as encoder',  type=bool, default=False, show_default=True)
 
 
 
