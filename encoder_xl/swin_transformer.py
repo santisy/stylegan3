@@ -14,14 +14,15 @@ class STEncoder(SwinTransformer):
                  patch_size=[4, 4],
                  depths=[6, 8, 12],
                  embed_dim=128,
-                 num_heads=[3, 6, 12],
+                 num_heads=[4, 8, 12],
                  window_size=[7, 7],
-                 stochastic_depth_prob=0.3,
+                 stochastic_depth_prob=0.0,
                  num_downsamples=2,
                  **kwargs):
 
-        depth_len = num_downsamples - math.log2(patch_size[0])  + 1
+        depth_len = int(num_downsamples - math.log2(patch_size[0])  + 1)
         depths = depths[:depth_len]
+        num_heads = num_heads[:depth_len]
 
         super().__init__(patch_size=patch_size,
                          stochastic_depth_prob=stochastic_depth_prob,
