@@ -242,6 +242,7 @@ def parse_comma_separated_list(s):
 # XL settings
 @click.option('--hash_resolution',    help='Force set hash table maximum resolution.',          type=int, default=-1, show_default=True)
 @click.option('--swin_transformer_encoder', help='Whether to use swin transformer as encoder',  type=bool, default=False, show_default=True)
+@click.option('--align_corners', help='Align the corners or not in grid retrieval',             type=bool, default=False, show_default=True)
 
 
 
@@ -334,7 +335,8 @@ def main(**kwargs):
                                  decoder_ch_mult=opts.decoder_ch_mult,
                                  dual_connection=opts.dual_connection,
                                  grid_type=opts.grid_type,
-                                 swin_transformer_encoder=opts.swin_transformer_encoder
+                                 swin_transformer_encoder=opts.swin_transformer_encoder,
+                                 align_corners=opts.align_corners
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)

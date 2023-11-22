@@ -71,6 +71,7 @@ class HashAutoGenerator(nn.Module):
                  dual_connection: bool=False,
                  grid_type: str='hash',
                  swin_transformer_encoder: bool=False,
+                 align_corners: bool=False,
                  **kwargs):
         """
             Args:
@@ -152,6 +153,8 @@ class HashAutoGenerator(nn.Module):
                 dual_connection: Dual connection to the key codes.
                     (default: False)
                 swin_transformer_encoder: Swin transformer encoder
+                    (default: False)
+                align_corners: Align the corners or not in grid retrieve
                     (default: False)
         """
 
@@ -242,7 +245,8 @@ class HashAutoGenerator(nn.Module):
                                             no_modulated_linear=False,
                                             one_hash_group=True,
                                             fused_spatial=fused_spatial,
-                                            gridtype=grid_type
+                                            gridtype=grid_type,
+                                            align_corners=align_corners
                                             ))
         dprint('Number of groups of hash tables is'
                f' {len(self.hash_encoder_list)}', color='g')

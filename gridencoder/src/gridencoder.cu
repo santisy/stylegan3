@@ -68,7 +68,7 @@ __device__ uint32_t get_grid_index(const uint32_t gridtype, const bool align_cor
     for (uint32_t d = 0; d < D && stride <= hashmap_size; d++) {
         index += pos_grid[d] * stride;
         multiplier = (D - d) <= feat_coord_dim ? res_multiplier : 1;
-        stride *= align_corners ? (resolution * multiplier): (resolution * multiplier + 1);
+        stride *= align_corners ? (resolution * multiplier): ((resolution + 1) * multiplier);
     }
 
     // NOTE: for NeRF, the hash is in fact not necessary. Check https://github.com/NVlabs/instant-ngp/issues/97.
