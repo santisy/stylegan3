@@ -22,7 +22,12 @@ _gridtype_to_id = {
 class _grid_encode(Function):
     @staticmethod
     @custom_fwd
-    def forward(ctx, inputs, embeddings, offsets, per_level_scale, base_resolution, calc_grad_inputs=False, gridtype=0, align_corners=False):
+    def forward(ctx, inputs, embeddings, offsets, per_level_scale, base_resolution,
+                calc_grad_inputs=False,
+                gridtype=0,
+                align_corners=False,
+                res_multiplier=1,
+                feat_coord_dim=1):
         # inputs: [B, D], float in [0, 1]
         # embeddings: [sO, C], float
         # offsets: [L + 1], int
@@ -49,7 +54,8 @@ class _grid_encode(Function):
         else:
             dy_dx = torch.empty(1, device=inputs.device, dtype=embeddings.dtype) # placeholder... TODO: a better way?
 
-        _backend.grid_encode_forward(inputs, embeddings, offsets, outputs, B, D, C, L, S, H, calc_grad_inputs, dy_dx, gridtype, align_corners)
+        _backend.grid_encode_forward(inputs, embeddings, offsets, outputs, B, D, C, L, S, H, calc_grad_inputs,
+                                     dy_dx, gridtype, align_corners, res_multiplier, feat_coord_dim)
 
         # permute back to [B, L * C]
         outputs = outputs.permute(1, 0, 2).reshape(B, L * C)
@@ -58,6 +64,8 @@ class _grid_encode(Function):
         ctx.dims = [B, D, C, L, S, H, gridtype]
         ctx.calc_grad_inputs = calc_grad_inputs
         ctx.align_corners = align_corners
+        ctx.res_multiplier = res_multiplier
+        ctx.feat_coord_dim = feat_coord_dim
 
         return outputs
     
@@ -70,6 +78,8 @@ class _grid_encode(Function):
         B, D, C, L, S, H, gridtype = ctx.dims
         calc_grad_inputs = ctx.calc_grad_inputs
         align_corners = ctx.align_corners
+        res_multiplier = ctx.res_multiplier
+        feat_coord_dim = ctx.feat_coord_dim
 
         # grad: [B, L * C] --> [L, B, C]
         grad = grad.view(B, L, C).permute(1, 0, 2).contiguous()
@@ -81,13 +91,14 @@ class _grid_encode(Function):
         else:
             grad_inputs = torch.zeros(1, device=inputs.device, dtype=embeddings.dtype)
 
-        _backend.grid_encode_backward(grad, inputs, embeddings, offsets, grad_embeddings, B, D, C, L, S, H, calc_grad_inputs, dy_dx, grad_inputs, gridtype, align_corners)
+        _backend.grid_encode_backward(grad, inputs, embeddings, offsets, grad_embeddings, B, D, C, L, S, H, calc_grad_inputs,
+                                      dy_dx, grad_inputs, gridtype, align_corners, res_multiplier, feat_coord_dim)
 
         if calc_grad_inputs:
             grad_inputs = grad_inputs.to(inputs.dtype)
-            return grad_inputs, grad_embeddings, None, None, None, None, None, None
+            return grad_inputs, grad_embeddings, None, None, None, None, None, None, None, None
         else:
-            return None, grad_embeddings, None, None, None, None, None, None
+            return None, grad_embeddings, None, None, None, None, None, None, None, None
 
 
 grid_encode = _grid_encode.apply
@@ -118,6 +129,7 @@ class GridEncoder(nn.Module):
                  direct_coord_input=False,
                  one_hash_group=False,
                  fused_spatial=False,
+                 res_multiplier=1
                  ):
         """
             Args:
@@ -186,6 +198,7 @@ class GridEncoder(nn.Module):
         self.no_modulated_linear = no_modulated_linear
         self.direct_coord_input = direct_coord_input
         self.fused_spatial = fused_spatial
+        self.res_multiplier = res_multiplier
 
 
         if one_hash_group:
@@ -254,7 +267,11 @@ class GridEncoder(nn.Module):
         self.max_params = 2 ** log2_hashmap_size
         for i in range(num_levels):
             resolution = int(np.ceil(base_resolution * per_level_scale ** i))
-            params_in_level = min(self.max_params, (resolution if align_corners else resolution + 1) ** input_dim) # limit max number
+            resolution = resolution if align_corners else resolution + 1
+            params_in_level_ = resolution ** input_dim
+            if res_multiplier > 1:
+                params_in_level_ = params_in_level_ * int(res_multiplier ** feat_coord_dim)
+            params_in_level = min(self.max_params, params_in_level_) # limit max number
             params_in_level = int(np.ceil(params_in_level / 8) * 8) # make divisible
             offsets.append(offset)
             offset += params_in_level
@@ -308,7 +325,16 @@ class GridEncoder(nn.Module):
         prefix_shape = list(inputs.shape[:-1])
         inputs = inputs.view(-1, self.input_dim)
 
-        outputs = grid_encode(inputs, self.embeddings, self.offsets, self.per_level_scale, self.base_resolution, inputs.requires_grad, self.gridtype_id, self.align_corners)
+        outputs = grid_encode(inputs,
+                              self.embeddings,
+                              self.offsets,
+                              self.per_level_scale,
+                              self.base_resolution,
+                              inputs.requires_grad,
+                              self.gridtype_id,
+                              self.align_corners,
+                              getattr(self, "res_multiplier", 1),
+                              getattr(self, "feat_coord_dim", 1))
         outputs = outputs.view(prefix_shape + [self.hash_out_dim])
 
         # This original outputs is the hash retrieve outpout before 
