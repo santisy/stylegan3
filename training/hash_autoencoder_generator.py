@@ -312,7 +312,7 @@ class HashAutoGenerator(nn.Module):
             std = torch.exp(0.5 * log_var)
             feat_coords = F.sigmoid(torch.randn_like(std) * std + mu)
 
-        if self.noise_perturb and not no_noise_perturb:
+        if self.noise_perturb and not no_noise_perturb and key_codes is None:
             feat_coords = torch.clip(
                     feat_coords  +
                     torch.randn_like(feat_coords) * self.noise_perturb_sigma,
