@@ -72,6 +72,8 @@ class HashAutoGenerator(nn.Module):
                  grid_type: str='hash',
                  swin_transformer_encoder: bool=False,
                  align_corners: bool=False,
+                 pg_hash_res: bool=False,
+                 pg_hr_iter_k: float=20,
                  **kwargs):
         """
             Args:
@@ -156,6 +158,10 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 align_corners: Align the corners or not in grid retrieve
                     (default: False)
+                pg_hash_res: Progressive hash resolution ratio flag
+                    (default: False)
+                pg_hr_iter_k: Progressive hash resolution iteration k
+                    (default: 20)
         """
 
         super().__init__()
@@ -246,7 +252,9 @@ class HashAutoGenerator(nn.Module):
                                             one_hash_group=True,
                                             fused_spatial=fused_spatial,
                                             gridtype=grid_type,
-                                            align_corners=align_corners
+                                            align_corners=align_corners,
+                                            pg_hash_res=pg_hash_res,
+                                            pg_hr_iter_k=pg_hr_iter_k
                                             ))
         dprint('Number of groups of hash tables is'
                f' {len(self.hash_encoder_list)}', color='g')
