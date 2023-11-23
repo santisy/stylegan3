@@ -34,6 +34,7 @@ class _grid_encode(Function):
         # RETURN: [B, F], float
 
         inputs = inputs.contiguous()
+        embeddings = embeddings.contiguous()
 
         B, D = inputs.shape # batch size, coord dim
         L = offsets.shape[0] - 1 # level
@@ -129,7 +130,9 @@ class GridEncoder(nn.Module):
                  direct_coord_input=False,
                  one_hash_group=False,
                  fused_spatial=False,
-                 res_multiplier=1
+                 res_multiplier=1,
+                 pg_hash_res=False,
+                 pg_hr_iter_k=20,
                  ):
         """
             Args:
@@ -171,6 +174,10 @@ class GridEncoder(nn.Module):
                     output actual style code at the same time.
                 fused_spatial (bool): If fused spatial, we would use the additional
                     input coordinates to modulate that.
+                pg_hash_res: Progressive hash resolution ratio flag
+                    (default: False)
+                pg_hr_iter_k: Progressive hash resolution iteration k
+                    (default: 20)
         """
         super().__init__()
 
@@ -199,6 +206,11 @@ class GridEncoder(nn.Module):
         self.direct_coord_input = direct_coord_input
         self.fused_spatial = fused_spatial
         self.res_multiplier = res_multiplier
+        self.pg_hash_res = pg_hash_res
+        self.pg_hr_iter_k = pg_hr_iter_k
+
+        if self.pg_hash_res:
+            self.register_buffer('pg_iter_count', torch.zeros(1) + 1)
 
 
         if one_hash_group:
@@ -325,16 +337,43 @@ class GridEncoder(nn.Module):
         prefix_shape = list(inputs.shape[:-1])
         inputs = inputs.view(-1, self.input_dim)
 
+        # Progressive enlarge the table or not?
+        res_multiplier_ori = res_multiplier = getattr(self, "res_multiplier", 1)
+        feat_coord_dim = getattr(self, "feat_coord_dim", 1)
+        offsets_ori = offsets = self.offsets
+        embeddings = self.embeddings
+        if getattr(self, 'pg_hash_res', False):
+            # The facotr `k`
+            k = self.pg_iter_count.cpu().item() // (self.pg_hr_iter_k * 1000)
+            # The divide ratio
+            l = int(max(int(res_multiplier_ori/(int(2**k))), 1))
+            # Decrease the offsets if necessary
+            offsets = (offsets_ori / l).to(torch.int32)
+            # Gradually increase res_multiplier
+            res_multiplier = min(int(2 ** k), res_multiplier_ori)
+            if self.pg_iter_count % (self.pg_hr_iter_k * 1000) == 0:
+                if int(2 ** k) <= res_multiplier:
+                    print("Increase the embeddings now! During the progressive growing!")
+                    print(f"multiplier now {2 ** k} vs {res_multiplier_ori}")
+                    l = int(max(int(res_multiplier_ori/(int(2**k))), 1))
+                    # Initialize the adjacent replicate to ensure smooth transition
+                    embeddings[l::int(l*2), :].data = embeddings[::int(l*2), :].data
+                    # Recalculate the offsets
+                    offsets = (offsets_ori / l).to(torch.int32)
+            embeddings = embeddings[::l, :]
+
+
         outputs = grid_encode(inputs,
-                              self.embeddings,
-                              self.offsets,
+                              embeddings,
+                              offsets,
                               self.per_level_scale,
                               self.base_resolution,
                               inputs.requires_grad,
                               self.gridtype_id,
                               self.align_corners,
-                              getattr(self, "res_multiplier", 1),
-                              getattr(self, "feat_coord_dim", 1))
+                              res_multiplier,
+                              feat_coord_dim
+                              )
         outputs = outputs.view(prefix_shape + [self.hash_out_dim])
 
         # This original outputs is the hash retrieve outpout before 
@@ -362,6 +401,10 @@ class GridEncoder(nn.Module):
             outputs1, _ = self.mini_linear(outputs1)
 
         outputs1 = outputs1.reshape(-1, self.out_dim)
+
+        # Add the iters
+        if getattr(self, 'pg_hash_res', False):
+            self.pg_iter_count += 1
 
         return outputs1, outputs2
 
