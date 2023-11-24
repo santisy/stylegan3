@@ -133,6 +133,7 @@ class GridEncoder(nn.Module):
                  res_multiplier=1,
                  pg_hash_res=False,
                  pg_hr_iter_k=20,
+                 pg_init_method='replicate'
                  ):
         """
             Args:
@@ -178,6 +179,8 @@ class GridEncoder(nn.Module):
                     (default: False)
                 pg_hr_iter_k: Progressive hash resolution iteration k
                     (default: 20)
+                pg_init_method: Progressive hash resolution initialization method
+                    (default: replicate)
         """
         super().__init__()
 
@@ -208,6 +211,7 @@ class GridEncoder(nn.Module):
         self.res_multiplier = res_multiplier
         self.pg_hash_res = pg_hash_res
         self.pg_hr_iter_k = pg_hr_iter_k
+        self.pg_init_method = pg_init_method
 
         if self.pg_hash_res:
             self.register_buffer('pg_iter_count', torch.zeros(1) + 1)
@@ -356,8 +360,15 @@ class GridEncoder(nn.Module):
                     print("Increase the embeddings now! During the progressive growing!")
                     print(f"multiplier now {2 ** k} vs {res_multiplier_ori}")
                     l = int(max(int(res_multiplier_ori/(int(2**k))), 1))
-                    # Initialize the adjacent replicate to ensure smooth transition
-                    embeddings[l::int(l*2), :].data = embeddings[::int(l*2), :].data
+                    if self.pg_init_method == "replicate":
+                        # Initialize the adjacent replicate to ensure smooth transition
+                        embeddings[l::int(l*2), :].data = embeddings[::int(l*2), :].data
+                    elif self.pg_init_method == "median":
+                        # Initialize the adjacent via median values
+                        e_ = embeddings[::int(l*2), :].data
+                        embeddings[l::int(l*2), :][:-1, :].data = (e_[1:, :] + e_[:-1, :]) / 2.0
+                    elif self.pg_init_method == "none":
+                        pass
                     # Recalculate the offsets
                     offsets = (offsets_ori / l).to(torch.int32)
             embeddings = embeddings[::l, :]
