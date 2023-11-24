@@ -74,6 +74,7 @@ class HashAutoGenerator(nn.Module):
                  align_corners: bool=False,
                  pg_hash_res: bool=False,
                  pg_hr_iter_k: float=20,
+                 pg_init_method: str='replicate',
                  **kwargs):
         """
             Args:
@@ -162,6 +163,8 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 pg_hr_iter_k: Progressive hash resolution iteration k
                     (default: 20)
+                pg_init_method: Progressive hash resolution initialization method
+                    (default: replicate)
         """
 
         super().__init__()
@@ -187,6 +190,7 @@ class HashAutoGenerator(nn.Module):
         self.unfold_k = unfold_k
         self.dual_connection = dual_connection
         self.grid_type = grid_type
+        self.pg_hash_res = pg_hash_res
         assert unfold_k >= 1
 
         if no_concat_coord or unfold_k > 1:
@@ -254,7 +258,8 @@ class HashAutoGenerator(nn.Module):
                                             gridtype=grid_type,
                                             align_corners=align_corners,
                                             pg_hash_res=pg_hash_res,
-                                            pg_hr_iter_k=pg_hr_iter_k
+                                            pg_hr_iter_k=pg_hr_iter_k,
+                                            pg_init_method=pg_init_method
                                             ))
         dprint('Number of groups of hash tables is'
                f' {len(self.hash_encoder_list)}', color='g')
@@ -431,7 +436,10 @@ class HashAutoGenerator(nn.Module):
                             feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
                                                             ).reshape(
                                                     b * res_now * res_now, -1)
-                            input_coords = torch.cat((coords, feat_coords_now), dim=1)
+                            if not self.pg_hash_res:
+                                input_coords = torch.cat((coords, feat_coords_now), dim=1)
+                            else:
+                                input_coords = torch.cat((feat_coords_now, coords), dim=1)
                         else:
                             input_coords = feat_coords_now.permute(0, 2, 3, 1
                                                                 ).reshape(
