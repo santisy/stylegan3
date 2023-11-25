@@ -67,7 +67,7 @@ __device__ uint32_t get_grid_index(const uint32_t gridtype, const bool align_cor
     #pragma unroll
     for (uint32_t d = 0; d < D && stride <= hashmap_size; d++) {
         index += pos_grid[d] * stride;
-        multiplier = (D - d) <= feat_coord_dim ? res_multiplier : 1;
+        multiplier = (d <= feat_coord_dim - 1) ? res_multiplier : 1;
         stride *= align_corners ? (resolution * multiplier): ((resolution + 1) * multiplier);
     }
 
@@ -143,7 +143,7 @@ __global__ void kernel_grid(
 
     #pragma unroll
     for (uint32_t d = 0; d < D; d++) {
-        pos[d] = inputs[d] * scale * ((D - d) <= feat_coord_dim ? res_multiplier : 1.0f) + (align_corners ? 0.0f : 0.5f);
+        pos[d] = inputs[d] * scale * (d <= feat_coord_dim - 1 ? res_multiplier : 1.0f) + (align_corners ? 0.0f : 0.5f);
         pos_grid[d] = floorf(pos[d]);
         pos[d] -= (float)pos_grid[d];
     }
@@ -277,7 +277,7 @@ __global__ void kernel_grid_backward(
 
     #pragma unroll
     for (uint32_t d = 0; d < D; d++) {
-        pos[d] = inputs[d] * scale * ((D - d) <= feat_coord_dim ? res_multiplier : 1.0f) + (align_corners ? 0.0f : 0.5f);
+        pos[d] = inputs[d] * scale * (d <= feat_coord_dim - 1 ? res_multiplier : 1.0f) + (align_corners ? 0.0f : 0.5f);
         pos_grid[d] = floorf(pos[d]);
         pos[d] -= (float)pos_grid[d];
     }
