@@ -245,7 +245,7 @@ def parse_comma_separated_list(s):
 @click.option('--align_corners', help='Align the corners or not in grid retrieval',             type=bool, default=False, show_default=True)
 @click.option('--pg_hash_res', help='Progressive increase the resolution of hash tables',       type=bool, default=False, show_default=True)
 @click.option('--pg_hr_iter_k', help='How many iters will the resolution of hash tables increased',      type=float, default=20, show_default=True)
-@click.option('--pg_init_method', help='Initialize method when increasing the table',           type=click.Choice(['median', 'replicate', 'none']), default='replicate', show_default=True)
+@click.option('--pg_init_method', help='Initialize method when increasing the table',           type=click.Choice(['median', 'replicate', 'none']), default='none', show_default=True)
 
 
 
