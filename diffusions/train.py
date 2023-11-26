@@ -111,10 +111,6 @@ def train_diffusion(**kwargs):
     dnnlib.util.Logger(file_name=os.path.join(run_dir, 'log.txt'),
                        file_mode='a', should_flush=True)
     
-    # Dump config
-    with open(os.path.join(run_dir, 'config.json'), 'w') as f:
-        json.dump(opts, f, indent=4)
-    
     # The encoder decoder one
     with dnnlib.util.open_url(opts.encoder_decoder_network) as f:
         G = legacy.load_network_pkl(f)['G_ema'] # type: ignore
@@ -127,6 +123,9 @@ def train_diffusion(**kwargs):
 
     rank_now = tdist.get_rank() if tdist.is_initialized() else 0
     world_size = tdist.get_world_size() if tdist.is_initialized() else 1
+    # Main process flag
+    main_p_flag = trainer.accelerator.is_main_process
+    main_p_local_flag = trainer.accelerator.is_local_main_process
     print(f"Rank now {rank_now}")
     print(f"World size is {world_size}")
     # Copy dataset if necessary
@@ -136,12 +135,19 @@ def train_diffusion(**kwargs):
         dataset_path = os.path.join(new_data_root, os.path.basename(opts.dataset))
     else:
         dataset_path = opts.dataset
-    if trainer.accelerator.is_local_main_process and opts.work_on_tmp_dir and not os.path.exists(dataset_path):
+    if main_p_local_flag and opts.work_on_tmp_dir and not os.path.exists(dataset_path):
         print(f"\033[92mCopying dataset {opts.dataset} to {tmp_dir} ...\033[00m")
         os.system(f"cp {opts.dataset} {new_data_root}") 
         print("\033[92mFinished copying.\033[00m")
     if tdist.is_initialized():
         tdist.barrier()
+    
+    # Dump config
+    json_file_path = os.path.join(run_dir, 'config.json')
+    with open(json_file_path, 'w') as f:
+        json.dump(opts, f, indent=4)
+    if opts.copy_back and main_p_flag:
+        copy_back_fn(json_file_path, local_dir)
 
     # Set randomness
     np.random.seed(rank_now)
@@ -208,9 +214,6 @@ def train_diffusion(**kwargs):
     # Rebind
     trainer.step_with_dl_iter = step_with_dl_iter.__get__(trainer, ImagenTrainer)
     # --------------------------------------------------
-
-    # Main process flag
-    main_p_flag = trainer.accelerator.is_main_process
 
     # Counting initials
     count = 0

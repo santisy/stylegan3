@@ -75,6 +75,7 @@ class HashAutoGenerator(nn.Module):
                  pg_hash_res: bool=False,
                  pg_hr_iter_k: float=20,
                  pg_init_method: str='replicate',
+                 pg_detach: bool=False,
                  **kwargs):
         """
             Args:
@@ -165,6 +166,8 @@ class HashAutoGenerator(nn.Module):
                     (default: 20)
                 pg_init_method: Progressive hash resolution initialization method
                     (default: replicate)
+                pg_detach: Detach encoded key codes when increase the resolution
+                    (default: False)
         """
 
         super().__init__()
@@ -259,7 +262,8 @@ class HashAutoGenerator(nn.Module):
                                             align_corners=align_corners,
                                             pg_hash_res=pg_hash_res,
                                             pg_hr_iter_k=pg_hr_iter_k,
-                                            pg_init_method=pg_init_method
+                                            pg_init_method=pg_init_method,
+                                            pg_detach=pg_detach
                                             ))
         dprint('Number of groups of hash tables is'
                f' {len(self.hash_encoder_list)}', color='g')
