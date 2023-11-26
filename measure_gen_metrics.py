@@ -79,6 +79,10 @@ def _measure_and_save(out_dir: str,
               help='Network pickle filename of diffusion unet.',
               default=None)
 @click.option('--diff_config', type=str, default="./diff_config.json")
+@click.option('--noise_scheduler', type=str,
+              help=("Noise scheduler type."
+                    " if provided would substitue the diff config."),
+              default=None)
 @click.option('--input_folder', type=str,
               help='If given, will evaluate the images here.',
               default=None)
@@ -151,6 +155,8 @@ def main(**kwargs):
             G = G.eval()
         with open(opts.diff_config, 'r') as f:
             cfg = dnnlib.EasyDict(json.load(f))
+            if opts.noise_scheduler is not None:
+                cfg.update({'noise_scheduler': opts.noise_scheduler})
             diff_model = construct_imagen_trainer(G,
                                                   cfg,
                                                   device,
