@@ -1,6 +1,6 @@
 """Add more noise scheduler to the original DDPMScheduler in difffuser"""
 import math
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Union
 
 import numpy as np
 import torch
@@ -63,6 +63,9 @@ class DDPMSchedulerCustom(DDPMScheduler):
             alphas_cumprod = torch.clip(alphas_cumprod, 1e-6, 0.9999)
             alphas = alphas_cumprod[1:] / alphas_cumprod[:-1]
             self.betas = 1 - alphas
+        elif beta_schedule == "cosine_variant_v2":
+            self.betas = betas_for_alpha_bar(num_train_timesteps,
+                                             alpha_transform_type="cosine_variant_v2")
         elif beta_schedule == "squaredcos_cap_v2":
             # Glide cosine schedule
             self.betas = betas_for_alpha_bar(num_train_timesteps)
