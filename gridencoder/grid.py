@@ -133,7 +133,8 @@ class GridEncoder(nn.Module):
                  res_multiplier=1,
                  pg_hash_res=False,
                  pg_hr_iter_k=20,
-                 pg_init_method='replicate'
+                 pg_init_method='replicate',
+                 pg_detach=False
                  ):
         """
             Args:
@@ -181,6 +182,8 @@ class GridEncoder(nn.Module):
                     (default: 20)
                 pg_init_method: Progressive hash resolution initialization method
                     (default: replicate)
+                pg_detach: Detach encoded key codes when increase the resolution
+                    (default: False)
         """
         super().__init__()
 
@@ -212,6 +215,7 @@ class GridEncoder(nn.Module):
         self.pg_hash_res = pg_hash_res
         self.pg_hr_iter_k = pg_hr_iter_k
         self.pg_init_method = pg_init_method
+        self.pg_detach = pg_detach
 
         if self.pg_hash_res:
             self.register_buffer('pg_iter_count', torch.zeros(1) + 1)
@@ -349,6 +353,8 @@ class GridEncoder(nn.Module):
         if getattr(self, 'pg_hash_res', False):
             # The facotr `k`
             k = self.pg_iter_count.cpu().item() // (self.pg_hr_iter_k * 1000)
+            if k > 0 and self.pg_detach:
+                inputs = inputs.detach()
             # The divide ratio
             l = int(max(int(res_multiplier_ori/(int(2**k))), 1))
             # Decrease the offsets if necessary
