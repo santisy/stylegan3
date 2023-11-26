@@ -134,7 +134,8 @@ class GridEncoder(nn.Module):
                  pg_hash_res=False,
                  pg_hr_iter_k=20,
                  pg_init_method='replicate',
-                 pg_detach=False
+                 pg_detach=False,
+                 pg_alter_opti=False,
                  ):
         """
             Args:
@@ -184,6 +185,9 @@ class GridEncoder(nn.Module):
                     (default: replicate)
                 pg_detach: Detach encoded key codes when increase the resolution
                     (default: False)
+                pg_alter_opti: Progressive increase resolution and alternatively
+                    optimize indices and feature grids.
+                    (default: False)
         """
         super().__init__()
 
@@ -216,6 +220,7 @@ class GridEncoder(nn.Module):
         self.pg_hr_iter_k = pg_hr_iter_k
         self.pg_init_method = pg_init_method
         self.pg_detach = pg_detach
+        self.pg_alter_opti = pg_alter_opti
 
         if self.pg_hash_res:
             self.register_buffer('pg_iter_count', torch.zeros(1) + 1)
@@ -350,11 +355,19 @@ class GridEncoder(nn.Module):
         feat_coord_dim = getattr(self, "feat_coord_dim", 1)
         offsets_ori = offsets = self.offsets
         embeddings = self.embeddings
-        if getattr(self, 'pg_hash_res', False):
+        if getattr(self, "pg_hash_res", False):
             # The facotr `k`
             k = self.pg_iter_count.cpu().item() // (self.pg_hr_iter_k * 1000)
             if k > 0 and self.pg_detach:
                 inputs = inputs.detach()
+            elif getattr(self, "pg_alter_opti", False):
+                k_ = self.pg_iter_count.cpu().item() // (self.pg_hr_iter_k * 500)
+                k_ = k_ - 2
+                if k_ >= 0:
+                    if k_ % 2 == 0:
+                        inputs = inputs.detach()
+                    if k_ % 2 == 1:
+                        embeddings = self.embeddings.detach()
             # The divide ratio
             l = int(max(int(res_multiplier_ori/(int(2**k))), 1))
             # Decrease the offsets if necessary

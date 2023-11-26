@@ -247,6 +247,7 @@ def parse_comma_separated_list(s):
 @click.option('--pg_hr_iter_k', help='How many iters will the resolution of hash tables increased',      type=float, default=20, show_default=True)
 @click.option('--pg_init_method', help='Initialize method when increasing the table',           type=click.Choice(['median', 'replicate', 'none']), default='none', show_default=True)
 @click.option('--pg_detach', help='Detach encoded key codes when increase the resolution',      type=bool, default=False, show_default=True)
+@click.option('--pg_alter_opti', help='Progressive iteratively optimizing',                     type=bool, default=False, show_default=True)
 
 
 
@@ -344,7 +345,8 @@ def main(**kwargs):
                                  pg_hash_res=opts.pg_hash_res,
                                  pg_hr_iter_k=opts.pg_hr_iter_k,
                                  pg_init_method=opts.pg_init_method,
-                                 pg_detach=opts.pg_detach
+                                 pg_detach=opts.pg_detach,
+                                 pg_alter_opti=opts.pg_alter_opti
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)
