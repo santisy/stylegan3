@@ -248,6 +248,7 @@ def parse_comma_separated_list(s):
 @click.option('--pg_init_method', help='Initialize method when increasing the table',           type=click.Choice(['median', 'replicate', 'none']), default='none', show_default=True)
 @click.option('--pg_detach', help='Detach encoded key codes when increase the resolution',      type=bool, default=False, show_default=True)
 @click.option('--pg_alter_opti', help='Progressive iteratively optimizing',                     type=bool, default=False, show_default=True)
+@click.option('--en_lr_mult', help='Encoder learning rate multiplier',                          type=float, default=1.0, show_default=True)
 
 
 
@@ -381,6 +382,7 @@ def main(**kwargs):
     c.image_snapshot_ticks = opts.img_snap
     c.random_seed = c.training_set_kwargs.random_seed = opts.seed
     c.data_loader_kwargs.num_workers = opts.workers
+    c.en_lr_mult = opts.en_lr_mult
 
     # Encoder args
     c.encoder_flag = opts.encoder_flag

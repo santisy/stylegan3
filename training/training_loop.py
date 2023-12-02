@@ -19,6 +19,7 @@ import numpy as np
 import PIL.Image
 import psutil
 import torch
+import torch.distributed as tdist
 import torchvision.utils as tvu
 
 import dnnlib
@@ -124,10 +125,14 @@ def training_loop(
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
     encoder_flag            = False,    # If we are training encoder (auto-encoder) or not.
+    en_lr_mult              = 1.0,      # Encoder learning rate scehduler
 ):
     # Initialize.
     start_time = time.time()
     device = torch.device('cuda', rank)
+    rank_ori = rank
+    rank = tdist.get_rank() if tdist.is_initialized() else 0
+    print(f'The input rank is {rank_ori}; The overall rank now (considering multi-node) {rank}')
     torch.cuda.set_device(device)
     np.random.seed(random_seed * num_gpus + rank)
     torch.manual_seed(random_seed * num_gpus + rank)
@@ -203,7 +208,14 @@ def training_loop(
     loss = dnnlib.util.construct_class_by_name(device=device, G=G, D=D, augment_pipe=augment_pipe, **loss_kwargs) # subclass of training.loss.Loss
     phases = []
     for name, module, opt_kwargs, reg_interval in [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]:
-        if reg_interval is None or loss.vq_decoder:
+        if name == 'G' and en_lr_mult != 1.0:
+            params = [{'params': [param for name, param in module.named_parameters() if name.starts_with("img_encoder")],
+                       'lr': opt_kwargs.lr * en_lr_mult},
+                      {'params': [param for name, param in module.named_parameters() if not name.starts_with("img_encoder")]}
+                      ]
+            opt = dnnlib.util.construct_class_by_name(params=params, **opt_kwargs) # subclass of torch.optim.Optimizer
+            phases += [dnnlib.EasyDict(name=name+'both', module=module, opt=opt, interval=1)]
+        elif reg_interval is None or loss.vq_decoder:
             opt = dnnlib.util.construct_class_by_name(params=module.parameters(), **opt_kwargs) # subclass of torch.optim.Optimizer
             phases += [dnnlib.EasyDict(name=name+'both', module=module, opt=opt, interval=1)]
         else: # Lazy regularization.
