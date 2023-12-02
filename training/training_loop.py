@@ -209,9 +209,9 @@ def training_loop(
     phases = []
     for name, module, opt_kwargs, reg_interval in [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]:
         if name == 'G' and en_lr_mult != 1.0:
-            params = [{'params': [param for name, param in module.named_parameters() if name.starts_with("img_encoder")],
+            params = [{'params': [param for name, param in module.named_parameters() if name.startswith("img_encoder")],
                        'lr': opt_kwargs.lr * en_lr_mult},
-                      {'params': [param for name, param in module.named_parameters() if not name.starts_with("img_encoder")]}
+                      {'params': [param for name, param in module.named_parameters() if not name.startswith("img_encoder")]}
                       ]
             opt = dnnlib.util.construct_class_by_name(params=params, **opt_kwargs) # subclass of torch.optim.Optimizer
             phases += [dnnlib.EasyDict(name=name+'both', module=module, opt=opt, interval=1)]
