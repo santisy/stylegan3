@@ -136,6 +136,7 @@ class GridEncoder(nn.Module):
                  pg_init_method='replicate',
                  pg_detach=False,
                  pg_alter_opti=False,
+                 pg_init_iter=0
                  ):
         """
             Args:
@@ -188,6 +189,8 @@ class GridEncoder(nn.Module):
                 pg_alter_opti: Progressive increase resolution and alternatively
                     optimize indices and feature grids.
                     (default: False)
+                pg_init_iter: The initial joint training step of progressive training.
+                    (default: 0)
         """
         super().__init__()
 
@@ -221,6 +224,7 @@ class GridEncoder(nn.Module):
         self.pg_init_method = pg_init_method
         self.pg_detach = pg_detach
         self.pg_alter_opti = pg_alter_opti
+        self.pg_init_iter = pg_init_iter
 
         if self.pg_hash_res:
             self.register_buffer('pg_iter_count', torch.zeros(1) + 1)
@@ -357,11 +361,13 @@ class GridEncoder(nn.Module):
         embeddings = self.embeddings
         if getattr(self, "pg_hash_res", False):
             # The facotr `k`
-            k = self.pg_iter_count.cpu().item() // (self.pg_hr_iter_k * 1000)
-            if k > 0 and self.pg_detach:
+            init_iter_n = getattr(self, "pg_init_iter", 0)
+            count = self.pg_iter_count.cpu().item() - init_iter_n
+            k = max(count // (self.pg_hr_iter_k * 1000), 0)
+            if (k > 0 or (k >= 0 and init_iter_n > 0)) and self.pg_detach:
                 inputs = inputs.detach()
             elif getattr(self, "pg_alter_opti", False):
-                k_ = self.pg_iter_count.cpu().item() // (self.pg_hr_iter_k * 500)
+                k_ = count // (self.pg_hr_iter_k * 500)
                 k_ = k_ - 2
                 if k_ >= 0:
                     if k_ % 2 == 0:
@@ -374,7 +380,7 @@ class GridEncoder(nn.Module):
             offsets = (offsets_ori / l).to(torch.int32)
             # Gradually increase res_multiplier
             res_multiplier = min(int(2 ** k), res_multiplier_ori)
-            if self.pg_iter_count % (self.pg_hr_iter_k * 1000) == 0:
+            if (count > 0) and (count % (self.pg_hr_iter_k * 1000) == 0):
                 if int(2 ** k) <= res_multiplier:
                     print("Increase the embeddings now! During the progressive growing!")
                     print(f"multiplier now {2 ** k} vs {res_multiplier_ori}")
@@ -433,7 +439,7 @@ class GridEncoder(nn.Module):
         outputs1 = outputs1.reshape(-1, self.out_dim)
 
         # Add the iters
-        if getattr(self, 'pg_hash_res', False):
+        if getattr(self, 'pg_hash_res', False) and self.training:
             self.pg_iter_count += 1
 
         return outputs1, outputs2
