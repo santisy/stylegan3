@@ -250,10 +250,12 @@ def parse_comma_separated_list(s):
 @click.option('--swin_transformer_encoder', help='Whether to use swin transformer as encoder',  type=bool, default=False, show_default=True)
 @click.option('--align_corners', help='Align the corners or not in grid retrieval',             type=bool, default=False, show_default=True)
 @click.option('--pg_hash_res', help='Progressive increase the resolution of hash tables',       type=bool, default=False, show_default=True)
+@click.option('--pg_init_iter', help='The initial joint training step number',                  type=int, default=0, show_default=True)
 @click.option('--pg_hr_iter_k', help='How many iters will the resolution of hash tables increased',      type=float, default=20, show_default=True)
 @click.option('--pg_init_method', help='Initialize method when increasing the table',           type=click.Choice(['median', 'replicate', 'none']), default='none', show_default=True)
 @click.option('--pg_detach', help='Detach encoded key codes when increase the resolution',      type=bool, default=False, show_default=True)
 @click.option('--pg_alter_opti', help='Progressive iteratively optimizing',                     type=bool, default=False, show_default=True)
+@click.option('--en_lr_mult', help='Encoder learning rate multiplier',                          type=float, default=1.0, show_default=True)
 
 # 3D switch
 @click.option('--flag_3d', help='The flag indicating that we are encoding something 3D',        type=bool, default=False, show_default=True)
@@ -355,8 +357,10 @@ def main(**kwargs):
                                  pg_init_method=opts.pg_init_method,
                                  pg_detach=opts.pg_detach,
                                  pg_alter_opti=opts.pg_alter_opti,
-                                 flag_3d=opts.flag_3d
+                                 flag_3d=opts.flag_3d,
+                                 pg_init_iter=opts.pg_init_iter
                                  )
+
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)
     c.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=1e-8)
@@ -392,6 +396,7 @@ def main(**kwargs):
     c.random_seed = c.training_set_kwargs.random_seed = opts.seed
     c.data_loader_kwargs.num_workers = opts.workers
     c.flag_3d = opts.flag_3d
+    c.en_lr_mult = opts.en_lr_mult
 
     # Encoder args
     c.encoder_flag = opts.encoder_flag
