@@ -77,6 +77,7 @@ class HashAutoGenerator(nn.Module):
                  pg_init_method: str='replicate',
                  pg_detach: bool=False,
                  pg_alter_opti: bool=False,
+                 flag_3d: bool=False,
                  **kwargs):
         """
             Args:
@@ -172,6 +173,8 @@ class HashAutoGenerator(nn.Module):
                 pg_alter_opti: Progressive increase resolution and alternatively
                     optimize indices and feature grids.
                     (default: False)
+                flag_3d: Progressive iteratively optimizing
+                    (default: False)
         """
 
         super().__init__()
@@ -198,9 +201,12 @@ class HashAutoGenerator(nn.Module):
         self.dual_connection = dual_connection
         self.grid_type = grid_type
         self.pg_hash_res = pg_hash_res
+        self.flag_3d = flag_3d
         assert unfold_k >= 1
 
-        if no_concat_coord or unfold_k > 1:
+        if flag_3d: 
+            spatial_coord_dim = 3
+        elif no_concat_coord or unfold_k > 1:
             spatial_coord_dim = 0
         elif fused_spatial or local_coords or combine_coords:
             spatial_coord_dim = 1
@@ -235,7 +241,8 @@ class HashAutoGenerator(nn.Module):
                                     num_downsamples=num_downsamples,
                                     resolution=res_max,
                                     use_kl_reg=use_kl_reg,
-                                    attn_resolutions=attn_resolutions
+                                    attn_resolutions=attn_resolutions,
+                                    flag_3d=flag_3d
                                     )
         else:
             self.img_encoder = STEncoder(out_dim=feat_coord_dim,
@@ -294,10 +301,12 @@ class HashAutoGenerator(nn.Module):
                                  pos_encodings(init_res, init_dim // 4).reshape(
                                     1, init_res, init_res, init_dim).permute(0, 3, 1, 2)
                                  )
-        elif vq_decoder:
+        elif vq_decoder or flag_3d:
+            num_upsamples = int(math.log2(res_max/init_res))
             self.synthesis_network = VQDecoder(ch=init_dim,
-                                               num_upsamples=num_downsamples,
-                                               num_res_blocks=2)
+                                               num_upsamples=num_upsamples,
+                                               num_res_blocks=1,
+                                               flag_3d=flag_3d)
         else:
             self.synthesis_network = SynthesisNetworkFromHash(style_dim,
                                                               res_max,
@@ -375,6 +384,7 @@ class HashAutoGenerator(nn.Module):
         """
         b = img.size(0) if img is not None else key_codes.size(0)
         device = img.device if img is not None else key_codes.device
+        flag_3d = getattr(self, "flag_3d", False)
 
         feat_coords, mu, log_var = self.encode(img, key_codes)
 
@@ -409,7 +419,9 @@ class HashAutoGenerator(nn.Module):
                 # Sample the local spatial coordinates
                 if not self.no_concat_coord:
                     if not self.local_coords:
-                        coords = sample_coords(b, res_now, combine_coords=self.combine_coords) # [0, 1], shape (B x N) x (2 or 3)
+                        coords = sample_coords(b, res_now,
+                                               dim=self.spatial_coord_dim,
+                                               combine_coords=self.combine_coords) # [0, 1], shape (B x N) x (2 or 3)
                     else:
                         # For each level (resolution), we have different local
                         #   coordinates.
@@ -440,11 +452,21 @@ class HashAutoGenerator(nn.Module):
                     # Repeat the spatial
                     if self.unfold_k == 1:
                         if not self.no_concat_coord:
-                            feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=2)
-                            feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=3)
-                            feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
-                                                            ).reshape(
-                                                    b * res_now * res_now, -1)
+                            if not flag_3d:
+                                feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=2)
+                                feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=3)
+                                feat_coords_now = feat_coords_now.permute(0, 2, 3, 1
+                                                                ).reshape(
+                                                        b * res_now * res_now, -1)
+                            else:
+                                feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=2)
+                                feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=3)
+                                feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=4)
+                                import pdb; pdb.set_trace()
+                                feat_coords_now = feat_coords_now.permute(0, 2, 3, 4, 1
+                                                                ).reshape(
+                                                        b * res_now * res_now * res_now, -1)
+
                             if not self.pg_hash_res:
                                 input_coords = torch.cat((coords, feat_coords_now), dim=1)
                             else:
@@ -480,8 +502,13 @@ class HashAutoGenerator(nn.Module):
                     modulation_s_collect.append(out2)
 
                 feats = torch.cat(feat_collect, dim=-1)
-                feats = feats.reshape(b, res_now, res_now, self.init_dim)
-                feats = feats.permute(0, 3, 1, 2)
+                if not flag_3d:
+                    feats = feats.reshape(b, res_now, res_now, self.init_dim)
+                    feats = feats.permute(0, 3, 1, 2)
+                else:
+                    feats = feats.reshape(b, res_now, res_now, res_now, self.init_dim)
+                    feats = feats.permute(0, 4, 1, 2, 3)
+
                 modulation_s_list.append(torch.cat(modulation_s_collect, dim=-1))
 
                 feats_list.append(feats)
@@ -493,7 +520,7 @@ class HashAutoGenerator(nn.Module):
         if self.movq_decoder:
             out = self.synthesis_network(
                 self.const_fourier_input.repeat(b, 1, 1, 1), feats_list)
-        elif self.vq_decoder:
+        elif self.vq_decoder or flag_3d:
             out = self.synthesis_network(feats)
         else:
             modulation_s = torch.stack(modulation_s_list, dim=1) 

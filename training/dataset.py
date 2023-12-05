@@ -35,6 +35,7 @@ class Dataset(torch.utils.data.Dataset):
         xflip       = False,    # Artificially double the size of the dataset via x-flips. Applied after max_size.
         random_seed = 0,        # Random seed to use when applying max_size.
         img_size    = -1,       # Whether to resize the images
+        flag_3d     = False,
     ):
         self._name = name
         self._raw_shape = list(raw_shape)
@@ -42,6 +43,7 @@ class Dataset(torch.utils.data.Dataset):
         self._raw_labels = None
         self._label_shape = None
         self._img_size = img_size
+        self._flag_3d = flag_3d
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -92,17 +94,18 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         image = self._load_raw_image(self._raw_idx[idx])
         assert isinstance(image, np.ndarray)
-        assert list(image.shape) == self.image_shape
-        assert image.dtype == np.uint8
-        if self._xflip[idx]:
-            assert image.ndim == 3 # CHW
-            image = image[:, :, ::-1]
-        image = image.copy()
-        if self._img_size > 0:
-            image = image.transpose(1, 2, 0)
-            image = cv2.resize(image, (self._img_size, self._img_size),
-                               interpolation=cv2.INTER_AREA)
-            image = image.transpose(2, 0, 1)
+        if not self._flag_3d:
+            assert list(image.shape) == self.image_shape
+            assert image.dtype == np.uint8
+            if self._xflip[idx]:
+                assert image.ndim == 3 # CHW
+                image = image[:, :, ::-1]
+            image = image.copy()
+            if self._img_size > 0:
+                image = image.transpose(1, 2, 0)
+                image = cv2.resize(image, (self._img_size, self._img_size),
+                                interpolation=cv2.INTER_AREA)
+                image = image.transpose(2, 0, 1)
 
         return image, self.get_label(idx)
 
@@ -131,12 +134,12 @@ class Dataset(torch.utils.data.Dataset):
 
     @property
     def num_channels(self):
-        assert len(self.image_shape) == 3 # CHW
         return self.image_shape[0]
 
     @property
     def resolution(self):
-        assert len(self.image_shape) == 3 # CHW
+        assert (len(self.image_shape) == 3 
+                or (len(self.image_shape) == 4) and self._flag_3d) # CHW
         assert self.image_shape[1] == self.image_shape[2]
         if self._img_size < 0:
             return self.image_shape[1]
@@ -174,11 +177,14 @@ class ImageFolderDataset(Dataset):
         resolution      = None, # Ensure specific resolution, None = highest available.
         split_val_n     = -1,   # Split the last n number image as the validation images
         imagenet_flag   = False, # Construct the label according to imagenet file name
+        flag_3d         = False, # Flag 3d
         **super_kwargs,         # Additional arguments for the Dataset base class.
     ):
         self._path = path
         self._zipfile = None
         self.imagenet_flag = imagenet_flag
+        self.flag_3d = flag_3d
+
         if imagenet_flag:
             with open("datasets/imagenet_classes.json", "r") as f:
                 class_names = sorted(json.load(f))
@@ -195,8 +201,11 @@ class ImageFolderDataset(Dataset):
         else:
             raise IOError('Path must point to a directory or zip')
 
-        PIL.Image.init()
-        self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in PIL.Image.EXTENSION)
+        if not flag_3d:
+            PIL.Image.init()
+            self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in PIL.Image.EXTENSION)
+        else:
+            self._image_fnames = sorted(fname for fname in self._all_fnames if fname.endswith(".npz"))
         # Filter out wrongly added validation file
         if split_val_n > 0:
             self._image_fnames = self._image_fnames[:-split_val_n]
@@ -207,7 +216,7 @@ class ImageFolderDataset(Dataset):
         raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
         if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
             raise IOError('Image files do not match the specified resolution')
-        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
+        super().__init__(name=name, raw_shape=raw_shape, flag_3d=flag_3d, **super_kwargs)
 
     @staticmethod
     def _file_ext(fname):
@@ -239,7 +248,10 @@ class ImageFolderDataset(Dataset):
     def _load_raw_image(self, raw_idx):
         fname = self._image_fnames[raw_idx]
         with self._open_file(fname) as f:
-            if pyspng is not None and self._file_ext(fname) == '.png':
+            if self.flag_3d:
+                image = np.load(f)["voxels"]
+                image = image[np.newaxis, :, :, :]
+            elif pyspng is not None and self._file_ext(fname) == '.png':
                 image = pyspng.load(f.read())
             else:
                 try:
@@ -248,9 +260,10 @@ class ImageFolderDataset(Dataset):
                     nparr = np.fromstring(f.read(), np.uint8) 
                     image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        if image.ndim == 2:
-            image = image[:, :, np.newaxis] # HW => HWC
-        image = image.transpose(2, 0, 1) # HWC => CHW
+        if not self.flag_3d:
+            if image.ndim == 2:
+                image = image[:, :, np.newaxis] # HW => HWC
+            image = image.transpose(2, 0, 1) # HWC => CHW
         return image
 
     @property

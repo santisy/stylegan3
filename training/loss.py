@@ -73,6 +73,7 @@ class StyleGAN2Loss(Loss):
                  kl_loss_weight=1e-4,
                  vq_decoder=False,
                  disc_start=50000,
+                 flag_3d=False,
                  ):
         super().__init__()
         self.device             = device
@@ -94,6 +95,7 @@ class StyleGAN2Loss(Loss):
         self.kl_loss_weight     = kl_loss_weight
         self.vq_decoder         = vq_decoder
         self.disc_start         = disc_start
+        self.flag_3d            = flag_3d
         if encoder_flag:
             self.vgg_perceptual_loss = VGGPerceptualLoss().to(device)
         if vq_decoder:
@@ -150,10 +152,11 @@ class StyleGAN2Loss(Loss):
                         loss_l2 = F.mse_loss(gen_img, real_img) * self.l2loss_weight
                         loss_Gmain += loss_l2
                         training_stats.report('Loss/G/l2loss', loss_l2)
-                        # VGG loss
-                        loss_vgg = self.vgg_perceptual_loss(gen_img, real_img) * 5.0
-                        loss_Gmain += loss_vgg
-                        training_stats.report('Loss/G/vggloss', loss_vgg)
+                        if not self.flag_3d:
+                            # VGG loss
+                            loss_vgg = self.vgg_perceptual_loss(gen_img, real_img) * 5.0
+                            loss_Gmain += loss_vgg
+                            training_stats.report('Loss/G/vggloss', loss_vgg)
                     else:
                         rec_loss = torch.abs(real_img.contiguous() - gen_img.contiguous()).mean()
                         loss_percep = self.perceptual_loss(
@@ -169,24 +172,25 @@ class StyleGAN2Loss(Loss):
                         loss_Gmain += loss_kl
                         training_stats.report('Loss/G/klloss', loss_kl)
 
-                if not self.vq_decoder:
-                    gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
-                    training_stats.report('Loss/scores/fake', gen_logits)
-                    training_stats.report('Loss/signs/fake', gen_logits.sign())
-                    g_loss = torch.nn.functional.softplus(-gen_logits).mean() # -log(sigmoid(gen_logits))
-                    loss_Gmain += g_loss
-                else:
-                    gen_logits = self.D(gen_img.contiguous())
-                    g_loss = -torch.mean(gen_logits)
-                    g_weight = calculate_adaptive_weight(torch.mean(loss_percep),
-                                                         g_loss,
-                                                         self.G.synthesis_network.conv_out.weight)
-                    if cur_tick < self.disc_start:
-                        g_weight = 0
-                    loss_Gmain += g_loss * g_weight
-                    training_stats.report('Loss/G/g_weight', g_weight)
+                if not self.flag_3d:
+                    if not self.vq_decoder:
+                        gen_logits = self.run_D(gen_img, gen_c, blur_sigma=blur_sigma)
+                        training_stats.report('Loss/scores/fake', gen_logits)
+                        training_stats.report('Loss/signs/fake', gen_logits.sign())
+                        g_loss = torch.nn.functional.softplus(-gen_logits).mean() # -log(sigmoid(gen_logits))
+                        loss_Gmain += g_loss
+                    else:
+                        gen_logits = self.D(gen_img.contiguous())
+                        g_loss = -torch.mean(gen_logits)
+                        g_weight = calculate_adaptive_weight(torch.mean(loss_percep),
+                                                            g_loss,
+                                                            self.G.synthesis_network.conv_out.weight)
+                        if cur_tick < self.disc_start:
+                            g_weight = 0
+                        loss_Gmain += g_loss * g_weight
+                        training_stats.report('Loss/G/g_weight', g_weight)
 
-                training_stats.report('Loss/G/loss', g_loss)
+                    training_stats.report('Loss/G/loss', g_loss)
                 
 
             with torch.autograd.profiler.record_function('Gmain_backward'):

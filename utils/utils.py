@@ -8,6 +8,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from hash_retrieve_module import HashTableRecon
+import open3d as o3d
+import cumcubes
 
 __all__ = ['sinuous_pos_encode']
 
@@ -85,6 +87,7 @@ def delete_file(file_path: str):
         os.remove(file_path)
 
 def sample_coords(b: int, img_size: int,
+                  dim: int=2,
                   sample_size: int=None,
                   single_batch: bool=False,
                   combine_coords: bool=False):
@@ -92,18 +95,20 @@ def sample_coords(b: int, img_size: int,
         Args:
             b (int): batch_size
             img_size (int): image size
+            dim (int): the number of spatial dimension (default: 2)
             combine_coords (bool): combine x,y coordinates to one dimension.
         Retrun:
             coords (torch.Tensor): B x N x (2 or 3), value range [0, 1]
     """
     # 2D sampling case
     c = torch.arange(img_size) + 0.5
-    x, y = torch.meshgrid(c, c, indexing='xy')
+    spatial_indices = torch.meshgrid(*([c,] * dim), indexing='xy')
     # Normalize it to [0, 1]
     if not combine_coords:
-        coords = torch.stack((x, y), dim=-1).reshape(1, -1, 2) / img_size
+        coords = torch.stack(spatial_indices, dim=-1).reshape(1, -1, dim) / img_size
     else:
-        coords = (x * img_size + y).reshape(1, -1, 1) / (img_size * img_size)
+        pass
+        #coords = (x * img_size + y).reshape(1, -1, 1) / (img_size * img_size)
 
     if sample_size is not None:
         sampled_indices = torch.randperm(coords.shape[1])[:sample_size]
@@ -257,3 +262,59 @@ def copy_back_fn(file_path:str, dst:str, isdir=False):
     except Exception as e:
         # Handle other exceptions
         print(f"An error occurred: {e}")
+
+
+# 3D PixelShuffle Up and 3D PixelShuffle Down
+def pixelshuffle_up_3d(input: torch.Tensor, s=2):
+    b, c, x, y, z = input.size()
+    nOut = c // int(s ** 3)
+
+    out_x = x * s
+    out_y = y * s
+    out_z = z * s
+
+    input_view = input.contiguous().view(b, nOut, s, s, s, x, y, z)
+
+    output = input_view.permute(0, 1, 5, 2, 6, 3, 7, 4).contiguous()
+
+    return output.view(b, nOut, out_x, out_y, out_z)
+
+
+def pixelshuffle_down_3d(input: torch.Tensor, s=2):
+
+    b, c, x, y, z = input.size()
+    nOut = c * int(s ** 3)
+
+    out_x = x // s
+    out_y = y // s
+    out_z = z // s
+
+    input_view = input.contiguous().view(b, c, out_x, s, out_y, s, out_z, s)
+
+    output = input_view.permute(0, 1, 3, 5, 7, 2, 4, 6).contiguous()
+
+    return output.view(b, nOut, out_x, out_y, out_z)
+
+
+def sdf_to_mesh(x: torch.Tensor, threshold=0):
+    # x: Input SDF grid (B, 1, X, Y, Z)
+    # output: Meshes object in tuple
+    x = x[:, 0]
+    verts, faces = [], []
+    for sdf_grid in x:
+        verts_, faces_ = cumcubes.marching_cubes(sdf_grid, threshold)
+        verts.append(verts_.cpu().numpy())
+        faces.append(faces_.cpu().numpy())
+    return verts, faces
+
+def save_sdf_grids_to_meshes(x: torch.Tensor, out_path: str,
+                             threshold=0):
+    """
+        x: in the size of [B, 1, X, Y, Z]
+    """
+    verts_list, faces_list = sdf_to_mesh(x, threshold)
+    for i, (v, f) in enumerate(zip(verts_list, faces_list)):
+        mesh = o3d.geometry.TriangleMesh()
+        mesh.vertices = o3d.utility.Vector3dVector(v)
+        mesh.triangles = o3d.utility.Vector3iVector(f)
+        o3d.io.write_triangle_mesh(f"{out_path}_{i}.obj", mesh)

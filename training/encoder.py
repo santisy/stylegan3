@@ -3,6 +3,8 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from utils.utils import pixelshuffle_down_3d
+from utils.utils import pixelshuffle_up_3d
 
 __all__ = ['Encoder']
 
@@ -34,20 +36,24 @@ def nonlinearity(x):
     return F.leaky_relu(x)
 
 
-def Normalize(in_channels):
-    return torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
+def Normalize(in_channels, num_groups=32):
+    return torch.nn.GroupNorm(num_groups=num_groups,
+                              num_channels=in_channels,
+                              eps=1e-6,
+                              affine=True)
 
 
 class Upsample(nn.Module):
-    def __init__(self, in_channels, with_conv):
+    def __init__(self, in_channels, with_conv, flag_3d=False):
         super().__init__()
         self.with_conv = with_conv
+        conv_ = torch.nn.Conv2d if not flag_3d else torch.nn.Conv3d
         if self.with_conv:
-            self.conv = torch.nn.Conv2d(in_channels,
-                                        in_channels,
-                                        kernel_size=3,
-                                        stride=1,
-                                        padding=1)
+            self.conv = conv_(in_channels,
+                              in_channels,
+                              kernel_size=3,
+                              stride=1,
+                              padding=1)
 
     def forward(self, x):
         x = torch.nn.functional.interpolate(x, scale_factor=2.0, mode="nearest")
@@ -57,65 +63,94 @@ class Upsample(nn.Module):
 
 
 class Downsample(nn.Module):
-    def __init__(self, in_channels, with_conv):
+    def __init__(self, in_channels, with_conv, conv_3D=False):
         super().__init__()
+        self.conv_3D = conv_3D
         self.with_conv = with_conv
         if self.with_conv:
             # no asymmetric padding in torch conv, must do it ourselves
-            self.conv = torch.nn.Conv2d(in_channels,
-                                        in_channels,
-                                        kernel_size=3,
-                                        stride=2,
-                                        padding=0)
+            if not conv_3D:
+                self.conv = torch.nn.Conv2d(in_channels,
+                                            in_channels,
+                                            kernel_size=3,
+                                            stride=2,
+                                            padding=0)
+            else:
+                self.conv = torch.nn.Conv3d(in_channels,
+                                            in_channels,
+                                            kernel_size=3,
+                                            stride=2,
+                                            padding=0)
+
 
     def forward(self, x):
-        if self.with_conv:
-            pad = (0,1,0,1)
-            x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
-            x = self.conv(x)
+        conv_3D = getattr(self, "conv_3D", False)
+        if not conv_3D:
+            if self.with_conv:
+                pad = (0,1,0,1)
+                x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
+                x = self.conv(x)
+            else:
+                x = torch.nn.functional.avg_pool2d(x, kernel_size=2, stride=2)
         else:
-            x = torch.nn.functional.avg_pool2d(x, kernel_size=2, stride=2)
+            if self.with_conv:
+                pad = (0,1,0,1,0,1)
+                x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
+                x = self.conv(x)
+            else:
+                x = torch.nn.functional.avg_pool3d(x, kernel_size=2, stride=2)
+
         return x
 
 
 class ResnetBlock(nn.Module):
-    def __init__(self, *, in_channels, out_channels=None, conv_shortcut=False,
-                 dropout, temb_channels=512):
+    def __init__(self, *,
+                 in_channels,
+                 out_channels=None,
+                 conv_shortcut=False,
+                 dropout,
+                 temb_channels=512,
+                 num_groups=32,
+                 conv_3D=False):
         super().__init__()
         self.in_channels = in_channels
         out_channels = in_channels if out_channels is None else out_channels
         self.out_channels = out_channels
         self.use_conv_shortcut = conv_shortcut
 
-        self.norm1 = Normalize(in_channels)
-        self.conv1 = torch.nn.Conv2d(in_channels,
-                                     out_channels,
-                                     kernel_size=3,
-                                     stride=1,
-                                     padding=1)
+        conv_ = nn.Conv2d if not conv_3D else nn.Conv3d
+
+        self.norm1 = Normalize(in_channels,
+                               num_groups=num_groups)
+        self.conv1 = conv_(in_channels,
+                           out_channels,
+                           kernel_size=3,
+                           stride=1,
+                           padding=1)
         if temb_channels > 0:
             self.temb_proj = torch.nn.Linear(temb_channels,
                                              out_channels)
-        self.norm2 = Normalize(out_channels)
+        self.norm2 = Normalize(out_channels,
+                               num_groups=num_groups)
         self.dropout = torch.nn.Dropout(dropout)
-        self.conv2 = torch.nn.Conv2d(out_channels,
-                                     out_channels,
-                                     kernel_size=3,
-                                     stride=1,
-                                     padding=1)
+        self.conv2 = conv_(out_channels,
+                           out_channels,
+                           kernel_size=3,
+                           stride=1,
+                           padding=1)
         if self.in_channels != self.out_channels:
             if self.use_conv_shortcut:
-                self.conv_shortcut = torch.nn.Conv2d(in_channels,
-                                                     out_channels,
-                                                     kernel_size=3,
-                                                     stride=1,
-                                                     padding=1)
+                self.conv_shortcut = conv_(in_channels,
+                                           out_channels,
+                                           kernel_size=3,
+                                           stride=1,
+                                           padding=1)
             else:
-                self.nin_shortcut = torch.nn.Conv2d(in_channels,
-                                                    out_channels,
-                                                    kernel_size=1,
-                                                    stride=1,
-                                                    padding=0)
+                self.nin_shortcut = conv_(in_channels,
+                                          out_channels,
+                                          kernel_size=1,
+                                          stride=1,
+                                          padding=0)
 
     def forward(self, x, temb):
         h = x
@@ -245,7 +280,7 @@ class Model(nn.Module):
             down.block = block
             down.attn = attn
             if i_level != self.num_resolutions-1:
-                down.downsample = Downsample(block_in, resamp_with_conv)
+                down.downsample = Downsample(block_in, resamp_with_conv, conv_3D=conv_3D)
                 curr_res = curr_res // 2
             self.down.append(down)
 
@@ -358,8 +393,16 @@ class Encoder(nn.Module):
                  resamp_with_conv=True,
                  double_z=True,
                  use_kl_reg=False,
+                 flag_3d: bool=False,
                  **ignore_kwargs):
         super().__init__()
+        if flag_3d:
+            # On the first layer, we would use the pixelshuffle down to 
+            #   pre-downsample the block
+            resolution = resolution // 2
+            num_downsamples = num_downsamples - 1
+            in_channels = int(1 * 2 ** 3)
+
         self.ch = ch
         self.temb_ch = 0
         self.num_resolutions = num_downsamples + 1
@@ -367,13 +410,17 @@ class Encoder(nn.Module):
         self.resolution = resolution
         self.in_channels = in_channels
         self.use_kl_reg = use_kl_reg
+        self.flag_3d = flag_3d
+
+        conv_ = nn.Conv2d if not flag_3d else nn.Conv3d
+        num_groups = 32 if not flag_3d else 8
 
         # downsampling
-        self.conv_in = torch.nn.Conv2d(in_channels,
-                                       self.ch,
-                                       kernel_size=3,
-                                       stride=1,
-                                       padding=1)
+        self.conv_in = conv_(in_channels,
+                             self.ch,
+                             kernel_size=3,
+                             stride=1,
+                             padding=1)
 
         curr_res = resolution
         in_ch_mult = (1,)+tuple(ch_mult)
@@ -388,7 +435,9 @@ class Encoder(nn.Module):
                 block.append(ResnetBlock(in_channels=block_in,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
-                                         dropout=dropout))
+                                         dropout=dropout,
+                                         num_groups=num_groups,
+                                         conv_3D=flag_3d))
                 block_in = block_out
                 if attn_resolutions is not None and  curr_res in attn_resolutions:
                     attn.append(AttnBlock(block_in))
@@ -396,7 +445,8 @@ class Encoder(nn.Module):
             down.block = block
             down.attn = attn
             if i_level != self.num_resolutions - 1:
-                down.downsample = Downsample(block_in, resamp_with_conv)
+                down.downsample = Downsample(block_in, resamp_with_conv,
+                                             conv_3D=flag_3d)
                 curr_res = curr_res // 2
             self.down.append(down)
 
@@ -414,12 +464,13 @@ class Encoder(nn.Module):
                                            dropout=dropout)
 
         # end
-        self.norm_out = Normalize(block_in)
+        self.norm_out = Normalize(block_in,
+                                  num_groups=num_groups)
         if not use_kl_reg:
-            self.conv_out = nn.Conv2d(block_out, feat_coord_dim, 1, 1, 0)
+            self.conv_out = conv_(block_out, feat_coord_dim, 1, 1, 0)
         else:
-            self.conv_out_mu = nn.Conv2d(block_out, feat_coord_dim, 1, 1, 0)
-            self.conv_out_var = nn.Conv2d(block_out, feat_coord_dim, 1, 1, 0)
+            self.conv_out_mu = conv_(block_out, feat_coord_dim, 1, 1, 0)
+            self.conv_out_var = conv_(block_out, feat_coord_dim, 1, 1, 0)
 
 
     def forward(self, x):
@@ -428,6 +479,8 @@ class Encoder(nn.Module):
         # timestep embedding
         temb = None
         b = x.size(0)
+        if getattr(self, "flag_3d", False):
+            x = pixelshuffle_down_3d(x)
 
         # downsampling
         hs = [self.conv_in(x)]
@@ -460,18 +513,32 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, ch=1024, out_ch=3,
+    def __init__(self,
+                 ch=1024,
+                 out_ch=3,
                  num_res_blocks=4,
-                 dropout=0.0, resamp_with_conv=True, 
+                 dropout=0.0,
+                 resamp_with_conv=True, 
                  num_upsamples=4,
                  ch_min=32,
-                 give_pre_end=False, **ignorekwargs):
+                 give_pre_end=False,
+                 flag_3d=False,
+                 **ignorekwargs):
         super().__init__()
+        if flag_3d:
+            num_upsamples = num_upsamples - 1
+            out_ch = int(1 * 2 ** 3)
+
+
+        num_groups = 32 if not flag_3d else 8
+        conv_ = nn.Conv2d if not flag_3d else nn.Conv3d
+
         self.ch = ch
         self.temb_ch = 0
         self.num_resolutions = num_upsamples + 1
         self.num_res_blocks = num_res_blocks
         self.give_pre_end = give_pre_end
+        self.flag_3d = flag_3d
 
         # compute in_ch_mult, block_in and curr_res at lowest res
         block_in = ch
@@ -498,6 +565,8 @@ class Decoder(nn.Module):
                 block.append(ResnetBlock(in_channels=block_in,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
+                                         conv_3D=flag_3d,
+                                         num_groups=num_groups,
                                          dropout=dropout))
                 block_in = block_out
                 #if curr_res in attn_resolutions:
@@ -506,17 +575,18 @@ class Decoder(nn.Module):
             up.block = block
             up.attn = attn
             if i_level != self.num_resolutions - 1:
-                up.upsample = Upsample(block_in, resamp_with_conv)
+                up.upsample = Upsample(block_in, resamp_with_conv,
+                                       flag_3d=flag_3d)
                 #curr_res = curr_res * 2
             self.up.append(up) # prepend to get consistent order
 
         # end
-        self.norm_out = Normalize(block_in)
-        self.conv_out = torch.nn.Conv2d(block_in,
-                                        out_ch,
-                                        kernel_size=3,
-                                        stride=1,
-                                        padding=1)
+        self.norm_out = Normalize(block_in, num_groups=num_groups)
+        self.conv_out = conv_(block_in,
+                              out_ch,
+                              kernel_size=3,
+                              stride=1,
+                              padding=1)
 
     def forward(self, z):
         #assert z.shape[1:] == self.z_shape[1:]
@@ -549,6 +619,8 @@ class Decoder(nn.Module):
         h = nonlinearity(h)
         h = self.conv_out(h)
         h = F.tanh(h)
+        if getattr(self, "flag_3d", False):
+            h = pixelshuffle_up_3d(h)
         return h
 
 

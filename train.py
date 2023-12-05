@@ -100,9 +100,15 @@ def launch_training(c, desc, outdir, dry_run):
 
 #----------------------------------------------------------------------------
 
-def init_dataset_kwargs(data):
+def init_dataset_kwargs(data, flag_3d=False):
     try:
-        dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False)
+        dataset_kwargs = dnnlib.EasyDict(
+            class_name='training.dataset.ImageFolderDataset',
+            path=data,
+            use_labels=True,
+            max_size=None,
+            xflip=False,
+            flag_3d=flag_3d)
         dataset_obj = dnnlib.util.construct_class_by_name(**dataset_kwargs) # Subclass of training.dataset.Dataset.
         dataset_kwargs.resolution = dataset_obj.resolution # Be explicit about resolution.
         dataset_kwargs.use_labels = dataset_obj.has_labels # Be explicit about labels.
@@ -145,7 +151,7 @@ def parse_comma_separated_list(s):
 @click.option('--batch-gpu',    help='Limit batch size per GPU', metavar='INT',                 type=click.IntRange(min=1))
 @click.option('--cbase',        help='Capacity multiplier', metavar='INT',                      type=click.IntRange(min=1), default=32768, show_default=True)
 @click.option('--cmax',         help='Max. feature maps', metavar='INT',                        type=click.IntRange(min=1), default=512, show_default=True)
-@click.option('--glr',          help='G learning rate  [default: varies]', metavar='FLOAT',     type=click.FloatRange(min=0))
+@click.option('--glr',          help='G learning rate  [default: varies]', metavar='FLOAT',     type=click.FloatRange(min=0), default=0.002, show_default=True)
 @click.option('--dlr',          help='D learning rate', metavar='FLOAT',                        type=click.FloatRange(min=0), default=0.002, show_default=True)
 @click.option('--map-depth',    help='Mapping network depth  [default: varies]', metavar='INT', type=click.IntRange(min=1), default=2, show_default=True)
 @click.option('--mbstd-group',  help='Minibatch std group size', metavar='INT',                 type=click.IntRange(min=1), default=4, show_default=True)
@@ -249,6 +255,8 @@ def parse_comma_separated_list(s):
 @click.option('--pg_detach', help='Detach encoded key codes when increase the resolution',      type=bool, default=False, show_default=True)
 @click.option('--pg_alter_opti', help='Progressive iteratively optimizing',                     type=bool, default=False, show_default=True)
 
+# 3D switch
+@click.option('--flag_3d', help='The flag indicating that we are encoding something 3D',        type=bool, default=False, show_default=True)
 
 
 def main(**kwargs):
@@ -346,7 +354,8 @@ def main(**kwargs):
                                  pg_hr_iter_k=opts.pg_hr_iter_k,
                                  pg_init_method=opts.pg_init_method,
                                  pg_detach=opts.pg_detach,
-                                 pg_alter_opti=opts.pg_alter_opti
+                                 pg_alter_opti=opts.pg_alter_opti,
+                                 flag_3d=opts.flag_3d
                                  )
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     c.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', betas=[0,0.99], eps=opts.eps_g)
@@ -355,7 +364,8 @@ def main(**kwargs):
     c.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, prefetch_factor=2)
 
     # Training set.
-    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data)
+    c.training_set_kwargs, dataset_name = init_dataset_kwargs(data=opts.data,
+                                                              flag_3d=opts.flag_3d)
     if opts.cond and not c.training_set_kwargs.use_labels:
         raise click.ClickException('--cond=True requires labels specified in dataset.json')
     c.training_set_kwargs.use_labels = opts.cond
@@ -372,7 +382,7 @@ def main(**kwargs):
     c.D_kwargs.block_kwargs.freeze_layers = opts.freezed
     c.D_kwargs.epilogue_kwargs.mbstd_group_size = opts.mbstd_group
     c.loss_kwargs.r1_gamma = opts.gamma
-    c.G_opt_kwargs.lr = 0.002 #(0.002 if opts.cfg == 'stylegan2' else 0.0025) if opts.glr is None else opts.glr
+    c.G_opt_kwargs.lr = opts.glr #(0.002 if opts.cfg == 'stylegan2' else 0.0025) if opts.glr is None else opts.glr
     c.D_opt_kwargs.lr = opts.dlr
     c.metrics = opts.metrics
     c.total_kimg = opts.kimg
@@ -381,6 +391,7 @@ def main(**kwargs):
     c.image_snapshot_ticks = opts.img_snap
     c.random_seed = c.training_set_kwargs.random_seed = opts.seed
     c.data_loader_kwargs.num_workers = opts.workers
+    c.flag_3d = opts.flag_3d
 
     # Encoder args
     c.encoder_flag = opts.encoder_flag
@@ -389,6 +400,7 @@ def main(**kwargs):
     c.loss_kwargs.use_kl_reg = opts.use_kl_reg
     c.loss_kwargs.kl_loss_weight = opts.kl_loss_weight
     c.loss_kwargs.vq_decoder = opts.vq_decoder
+    c.loss_kwargs.flag_3d = opts.flag_3d
     if opts.encoder_flag:
         c.G_kwargs.class_name = 'training.hash_autoencoder_generator.HashAutoGenerator'
     c.D_kwargs.encoder_flag = opts.encoder_flag

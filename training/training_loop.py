@@ -28,6 +28,8 @@ from torch_utils import misc, training_stats
 from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
 from utils.dist_utils import dprint
 from utils.utils import delete_file
+from utils.utils import sdf_to_mesh
+from utils.utils import save_sdf_grids_to_meshes
 
 #----------------------------------------------------------------------------
 
@@ -124,6 +126,7 @@ def training_loop(
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
     encoder_flag            = False,    # If we are training encoder (auto-encoder) or not.
+    flag_3d                 = False,    # 3D traing (No discriminator, dataset, and only L2 Loss)
 ):
     # Initialize.
     start_time = time.time()
@@ -151,7 +154,10 @@ def training_loop(
     # Construct networks.
     dprint('Constructing networks...')
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels)
-    D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+    if not flag_3d:
+        D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+    else:
+        D = None
     common_kwargs.update(dict(img_size=training_set.resolution,
                               mlp_out_dim=training_set.num_channels,
                               res_max=training_set.resolution))
@@ -164,19 +170,29 @@ def training_loop(
         with dnnlib.util.open_url(resume_pkl) as f:
             resume_data = legacy.load_network_pkl(f)
         for name, module in [('G', G), ('D', D), ('G_ema', G_ema)]:
+            if module is None:
+                continue
             misc.copy_params_and_buffers(resume_data[name], module, require_all=False)
 
     # Print network summary tables.
     if rank == 0:
         z = torch.empty([batch_gpu, G.z_dim], device=device)
         c = torch.empty([batch_gpu, G.c_dim], device=device)
-        real_img = torch.empty([batch_gpu, 3,
-                                training_set.resolution,
-                                training_set.resolution],
-                                device=device)
+        if not flag_3d:
+            real_img = torch.empty([batch_gpu, 3,
+                                    training_set.resolution,
+                                    training_set.resolution],
+                                    device=device)
+        else:
+            real_img = torch.empty([batch_gpu, 1,
+                                    training_set.resolution,
+                                    training_set.resolution,
+                                    training_set.resolution],
+                                    device=device)
         G_input = [z, c] if not encoder_flag else [real_img, c]
         img = misc.print_module_summary(G, G_input)
-        misc.print_module_summary(D, [img, c])
+        if D is not None:
+            misc.print_module_summary(D, [img, c])
 
     # Setup augmentation.
     if rank == 0:
@@ -203,6 +219,8 @@ def training_loop(
     loss = dnnlib.util.construct_class_by_name(device=device, G=G, D=D, augment_pipe=augment_pipe, **loss_kwargs) # subclass of training.loss.Loss
     phases = []
     for name, module, opt_kwargs, reg_interval in [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]:
+        if module is None:
+            continue
         if reg_interval is None or loss.vq_decoder:
             opt = dnnlib.util.construct_class_by_name(params=module.parameters(), **opt_kwargs) # subclass of torch.optim.Optimizer
             phases += [dnnlib.EasyDict(name=name+'both', module=module, opt=opt, interval=1)]
@@ -228,16 +246,29 @@ def training_loop(
     if rank == 0:
         print('Exporting sample images...')
         grid_size, real_images, labels = setup_snapshot_image_grid(training_set=training_set)
-        save_image_grid(real_images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
+        if not flag_3d:
+            save_image_grid(real_images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
+        else:
+            real_images = (real_images[:4])
+            real_images = torch.from_numpy(real_images).to(device).float()
+            save_sdf_grids_to_meshes(real_images, os.path.join(run_dir, 'reals'))
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
-        grid_imgs = torch.from_numpy(real_images).to(device).float() / 127.5 - 1.0
+        if not flag_3d:
+            grid_imgs = torch.from_numpy(real_images).to(device).float() / 127.5 - 1.0
+        else:
+            grid_imgs= real_images
         grid_imgs = grid_imgs.split(batch_gpu)
         if not encoder_flag:
             images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
         else:
             images = torch.cat([G_ema(img=img, c=c, noise_mode='const').cpu() for img, c in zip(grid_imgs, grid_c)]).numpy()
-        save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
+        if not flag_3d:
+            save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
+        #else:
+        #    images = torch.from_numpy(images).to(device).float()
+        #    save_sdf_grids_to_meshes(images, os.path.join(run_dir, 'fakes_init'))
+        print('Finished exporting sample images...')
 
     # Temp for debug
     print(f'\033[92mrank now {rank}\033[00m')
@@ -277,7 +308,10 @@ def training_loop(
         # Fetch training data.
         with torch.autograd.profiler.record_function('data_fetch'):
             phase_real_img, phase_real_c = next(training_set_iterator)
-            phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
+            if not flag_3d:
+                phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
+            else:
+                phase_real_img = (phase_real_img.to(device).to(torch.float32)).split(batch_gpu)
             phase_real_c = phase_real_c.to(device).split(batch_gpu)
             all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
             all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
@@ -378,7 +412,9 @@ def training_loop(
                 print('Aborting...')
 
         # Save image snapshot.
-        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
+        if ((rank == 0) and (image_snapshot_ticks is not None) and 
+            (done or cur_tick % image_snapshot_ticks == 0) and
+            cur_nimg > 0 and cur_tick > 0):
             if not encoder_flag:
                 images = torch.cat([G_ema(z=z,
                                         c=c,
@@ -389,15 +425,28 @@ def training_loop(
                                         c=c,
                                         noise_mode='const',
                                         ).cpu() for img, c in zip(grid_imgs, grid_c)]).numpy()
-            save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+            out_path = os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}')
+            if not flag_3d:
+                save_image_grid(images, f"{out_path}.png",
+                                drange=[-1,1], grid_size=grid_size)
+            else:
+                images = torch.from_numpy(images).to(device).float()
+                save_sdf_grids_to_meshes(images, out_path)
             if stats_tfevents is not None:
                 global_step = int(cur_nimg / 1e3)
-                stats_tfevents.add_image(f'fake', tvu.make_grid(
-                    torch.tensor(images[:16]),
-                    nrow=min(4, int(math.ceil(images.shape[0]) ** 0.5)),
-                    normalize=True,
-                    value_range=(-1,1)
-                ), global_step)
+                if not flag_3d:
+                    stats_tfevents.add_image('fake', tvu.make_grid(
+                        torch.tensor(images[:16]),
+                        nrow=min(4, int(math.ceil(images.shape[0]) ** 0.5)),
+                        normalize=True,
+                        value_range=(-1,1)
+                    ), global_step)
+                else:
+                    verts, faces = sdf_to_mesh(images)
+                    stats_tfevents.add_mesh('fake',
+                                             vertices=torch.stack(verts),
+                                             faces=torch.stack(faces),
+                                             global_step=global_step)
 
 
         # Save network snapshot.
