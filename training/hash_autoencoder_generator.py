@@ -466,7 +466,6 @@ class HashAutoGenerator(nn.Module):
                                 feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=2)
                                 feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=3)
                                 feat_coords_now = feat_coords_now.repeat_interleave(repeat_ratio_now, dim=4)
-                                import pdb; pdb.set_trace()
                                 feat_coords_now = feat_coords_now.permute(0, 2, 3, 4, 1
                                                                 ).reshape(
                                                         b * res_now * res_now * res_now, -1)
