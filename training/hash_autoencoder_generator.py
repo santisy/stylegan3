@@ -77,7 +77,7 @@ class HashAutoGenerator(nn.Module):
                  pg_init_method: str='replicate',
                  pg_detach: bool=False,
                  pg_alter_opti: bool=False,
-                 pg_init_iter: int=0,
+                 pg_init_iter_k: int=0,
                  **kwargs):
         """
             Args:
@@ -173,7 +173,7 @@ class HashAutoGenerator(nn.Module):
                 pg_alter_opti: Progressive increase resolution and alternatively
                     optimize indices and feature grids.
                     (default: False)
-                pg_init_iter: The initial joint training step of progressive training.
+                pg_init_iter_k: The initial joint training step of progressive training.
                     (default: 0)
         """
 
@@ -272,7 +272,7 @@ class HashAutoGenerator(nn.Module):
                                             pg_init_method=pg_init_method,
                                             pg_detach=pg_detach,
                                             pg_alter_opti=pg_alter_opti,
-                                            pg_init_iter=pg_init_iter,
+                                            pg_init_iter_k=pg_init_iter_k,
                                             ))
         dprint('Number of groups of hash tables is'
                f' {len(self.hash_encoder_list)}', color='g')
