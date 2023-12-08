@@ -136,7 +136,7 @@ class GridEncoder(nn.Module):
                  pg_init_method='replicate',
                  pg_detach=False,
                  pg_alter_opti=False,
-                 pg_init_iter=0
+                 pg_init_iter_k=0
                  ):
         """
             Args:
@@ -189,7 +189,7 @@ class GridEncoder(nn.Module):
                 pg_alter_opti: Progressive increase resolution and alternatively
                     optimize indices and feature grids.
                     (default: False)
-                pg_init_iter: The initial joint training step of progressive training.
+                pg_init_iter_k: The initial joint training step of progressive training.
                     (default: 0)
         """
         super().__init__()
@@ -224,7 +224,7 @@ class GridEncoder(nn.Module):
         self.pg_init_method = pg_init_method
         self.pg_detach = pg_detach
         self.pg_alter_opti = pg_alter_opti
-        self.pg_init_iter = pg_init_iter
+        self.pg_init_iter_k = pg_init_iter_k
 
         if self.pg_hash_res:
             self.register_buffer('pg_iter_count', torch.zeros(1) + 1)
@@ -361,9 +361,9 @@ class GridEncoder(nn.Module):
         embeddings = self.embeddings
         if getattr(self, "pg_hash_res", False):
             # The facotr `k`
-            init_iter_n = getattr(self, "pg_init_iter", 0)
+            init_iter_n = getattr(self, "pg_init_iter_k", 0) * 1000
             count = self.pg_iter_count.cpu().item() - init_iter_n
-            k = max(count // (self.pg_hr_iter_k * 1000), 0)
+            k = count // (self.pg_hr_iter_k * 1000)
             if (k > 0 or (k >= 0 and init_iter_n > 0)) and self.pg_detach:
                 inputs = inputs.detach()
             elif getattr(self, "pg_alter_opti", False):
@@ -374,6 +374,7 @@ class GridEncoder(nn.Module):
                         inputs = inputs.detach()
                     if k_ % 2 == 1:
                         embeddings = self.embeddings.detach()
+            k = max(k, 0)
             # The divide ratio
             l = int(max(int(res_multiplier_ori/(int(2**k))), 1))
             # Decrease the offsets if necessary
