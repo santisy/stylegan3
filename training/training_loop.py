@@ -456,8 +456,8 @@ def training_loop(
                 else:
                     verts, faces = sdf_to_mesh(images)
                     stats_tfevents.add_mesh('fake',
-                                             vertices=torch.stack(verts),
-                                             faces=torch.stack(faces),
+                                             vertices=torch.from_numpy(np.stack(verts)),
+                                             faces=torch.from_numpy(np.stack(faces)),
                                              global_step=global_step)
 
 
