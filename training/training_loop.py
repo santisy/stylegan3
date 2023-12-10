@@ -454,11 +454,7 @@ def training_loop(
                         value_range=(-1,1)
                     ), global_step)
                 else:
-                    verts, faces = sdf_to_mesh(images)
-                    stats_tfevents.add_mesh('fake',
-                                             vertices=torch.from_numpy(np.stack(verts)),
-                                             faces=torch.from_numpy(np.stack(faces)),
-                                             global_step=global_step)
+                    pass
 
 
         # Save network snapshot.
