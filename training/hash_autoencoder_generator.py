@@ -79,6 +79,7 @@ class HashAutoGenerator(nn.Module):
                  pg_alter_opti: bool=False,
                  flag_3d: bool=False,
                  pg_init_iter_k: int=0,
+                 invert_coord: bool=False,
                  **kwargs):
         """
             Args:
@@ -178,6 +179,8 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 pg_init_iter: The initial joint training step of progressive training.
                     (default: 0)
+                invert_coord: Invert the coordinate order
+                    (default: False)
         """
 
         super().__init__()
@@ -205,6 +208,7 @@ class HashAutoGenerator(nn.Module):
         self.grid_type = grid_type
         self.pg_hash_res = pg_hash_res
         self.flag_3d = flag_3d
+        self.invert_coord = invert_coord
         assert unfold_k >= 1
 
         if flag_3d: 
@@ -470,7 +474,7 @@ class HashAutoGenerator(nn.Module):
                                                                 ).reshape(
                                                         b * res_now * res_now * res_now, -1)
 
-                            if not self.pg_hash_res:
+                            if not self.pg_hash_res and not self.invert_coord:
                                 input_coords = torch.cat((coords, feat_coords_now), dim=1)
                             else:
                                 input_coords = torch.cat((feat_coords_now, coords), dim=1)
