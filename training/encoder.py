@@ -394,14 +394,18 @@ class Encoder(nn.Module):
                  double_z=True,
                  use_kl_reg=False,
                  flag_3d: bool=False,
+                 no_pre_pixelreshape: bool=False,
                  **ignore_kwargs):
         super().__init__()
         if flag_3d:
             # On the first layer, we would use the pixelshuffle down to 
             #   pre-downsample the block
-            resolution = resolution // 2
-            num_downsamples = num_downsamples - 1
-            in_channels = int(1 * 2 ** 3)
+            if not no_pre_pixelreshape:
+                resolution = resolution // 2
+                num_downsamples = num_downsamples - 1
+                in_channels = int(1 * 2 ** 3)
+            else:
+                in_channels = 1
 
         self.ch = ch
         self.temb_ch = 0
@@ -411,6 +415,7 @@ class Encoder(nn.Module):
         self.in_channels = in_channels
         self.use_kl_reg = use_kl_reg
         self.flag_3d = flag_3d
+        self.no_pre_pixelreshape = no_pre_pixelreshape
 
         conv_ = nn.Conv2d if not flag_3d else nn.Conv3d
         num_groups = 32 if not flag_3d else 8
@@ -479,7 +484,8 @@ class Encoder(nn.Module):
         # timestep embedding
         temb = None
         b = x.size(0)
-        if getattr(self, "flag_3d", False):
+        if (getattr(self, "flag_3d", False) and
+            not getattr(self, "no_pre_pixelreshape", False)):
             x = pixelshuffle_down_3d(x)
 
         # downsampling
@@ -523,11 +529,15 @@ class Decoder(nn.Module):
                  ch_min=32,
                  give_pre_end=False,
                  flag_3d=False,
+                 no_pre_pixelreshape=False,
                  **ignorekwargs):
         super().__init__()
         if flag_3d:
-            num_upsamples = num_upsamples - 1
-            out_ch = int(1 * 2 ** 3)
+            if not no_pre_pixelreshape:
+                num_upsamples = num_upsamples - 1
+                out_ch = int(1 * 2 ** 3)
+            else:
+                out_ch = 1
 
 
         num_groups = 32 if not flag_3d else 8
@@ -539,6 +549,7 @@ class Decoder(nn.Module):
         self.num_res_blocks = num_res_blocks
         self.give_pre_end = give_pre_end
         self.flag_3d = flag_3d
+        self.no_pre_pixelreshape = no_pre_pixelreshape
 
         # compute in_ch_mult, block_in and curr_res at lowest res
         block_in = ch
@@ -561,7 +572,7 @@ class Decoder(nn.Module):
             block = nn.ModuleList()
             attn = nn.ModuleList()
             block_out = max(ch // (2 ** (i_level + 1)), ch_min)
-            for i_block in range(self.num_res_blocks+1):
+            for i_block in range(self.num_res_blocks):
                 block.append(ResnetBlock(in_channels=block_in,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
@@ -604,7 +615,7 @@ class Decoder(nn.Module):
 
         # upsampling
         for i_level in range(self.num_resolutions):
-            for i_block in range(self.num_res_blocks+1):
+            for i_block in range(self.num_res_blocks):
                 h = self.up[i_level].block[i_block](h, temb)
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
@@ -619,7 +630,8 @@ class Decoder(nn.Module):
         h = nonlinearity(h)
         h = self.conv_out(h)
         h = F.tanh(h)
-        if getattr(self, "flag_3d", False):
+        if (getattr(self, "flag_3d", False) and 
+            not getattr(self, "no_pre_pixelreshape", False)):
             h = pixelshuffle_up_3d(h)
         return h
 

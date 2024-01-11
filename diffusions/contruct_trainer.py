@@ -3,6 +3,7 @@
 import torch.nn as nn
 
 from imagen_pytorch import Unet as Unet_Imagen
+from diffusions.imagen_3d import Unet3D as Unet3D_imagen
 from imagen_pytorch import ImagenTrainer
 from diffusions.imagen_custom import Imagen
 from denoising_diffusion_pytorch import Unet as Unet_DDPM
@@ -22,22 +23,36 @@ def get_layer_attns(atten_range, total_len):
 
     return tuple(layer_attns)
 
-def construct_imagen_trainer(G, cfg, device=None, ckpt_path=None, test_flag=False):
+def construct_imagen_trainer(G,
+                             cfg,
+                             device=None,
+                             flag_3d=False,
+                             ckpt_path=None,
+                             test_flag=False):
     dim_mults = cfg.get('dim_mults', (1, 2, 2, 4))
     use_ddpm = cfg.get('use_ddpm', False)
 
     if not use_ddpm:
         class_embed_dim = 512
-        unet = Unet_Imagen(dim=cfg.dim,
-                           text_embed_dim=class_embed_dim,
-                           channels=G.feat_coord_dim,
-                           dim_mults=dim_mults,
-                           num_resnet_blocks=cfg.get('num_resnet_blocks', 3),
-                           layer_attns=get_layer_attns(cfg.get('atten_layers', [3, 4]),
-                                                       len(dim_mults)),
-                           layer_cross_attns = False,
-                           use_linear_attn = True,
-                           cond_on_text = cfg.class_condition)
+        if flag_3d:
+            # This is the pure 3D convolution
+            # Using the fully 3D convolutions
+            unet = Unet3D_imagen(
+                dim=cfg.dim,
+                dim_mults=dim_mults,
+            )
+        else:
+            unet = Unet_Imagen(dim=cfg.dim,
+                               text_embed_dim=class_embed_dim,
+                               channels=G.feat_coord_dim,
+                               dim_mults=dim_mults,
+                               num_resnet_blocks=cfg.get('num_resnet_blocks', 3),
+                               layer_attns=get_layer_attns(cfg.get('atten_layers', [3, 4]),
+                                                           len(dim_mults)),
+                               layer_cross_attns = False,
+                               use_linear_attn = True,
+                               cond_on_text = cfg.class_condition)
+
         if cfg.class_condition:
             unet.add_module("class_embedding_layer",
                             nn.Embedding(1000, class_embed_dim))

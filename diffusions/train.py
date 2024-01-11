@@ -24,6 +24,7 @@ import torchvision.utils as tvu
 from utils.utils import delete_file
 from utils.utils import cast_device
 from utils.utils import copy_back_fn
+from utils.utils import save_sdf_grids_to_meshes
 from training.dataset import ImageFolderDataset as Dataset
 from diffusions.decode import decode_nc
 from diffusions.contruct_trainer import construct_imagen_trainer
@@ -93,6 +94,10 @@ tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 @click.option('--mixed_precision', type=str, default="no", show_default=True)
 @click.option('--copy_back', type=bool, default=False, show_default=True)
 
+# 3D flags
+@click.option('--flag_3d', type=bool, default=False, show_default=True)
+
+
 def train_diffusion(**kwargs):
 
     opts = dnnlib.EasyDict(kwargs) # Command line arguments.
@@ -117,7 +122,11 @@ def train_diffusion(**kwargs):
         G = G.eval()
 
     # Diffusion Unet Module and optimizer --------------------
-    trainer = construct_imagen_trainer(G, opts, device=None, ckpt_path=opts.resume)
+    trainer = construct_imagen_trainer(G,
+                                       opts,
+                                       flag_3d=opts.flag_3d,
+                                       device=None,
+                                       ckpt_path=opts.resume)
     G = G.to(trainer.device) # This device is coming from accelerator
 
 
@@ -161,11 +170,14 @@ def train_diffusion(**kwargs):
     # Dataset, sampler and iterator
     # Add the collate_fn + encode part
     dataset = Dataset(dataset_path,
-                      imagenet_flag=opts.class_condition)
+                      imagenet_flag=opts.class_condition,
+                      flag_3d=opts.flag_3d)
     # Collate fn
     def collate_fn(batch_tuple):
         img = torch.tensor(torch.stack([torch.tensor(x[0]) for x in batch_tuple], dim=0))
-        img = img.float() / 127.5 - 1.0
+        if not opts.flag_3d:
+            # For objects SDF field, the obj has already been normalized
+            img = img.float() / 127.5 - 1.0
         if not opts.class_condition:
             label = None
         else:
@@ -273,15 +285,25 @@ def train_diffusion(**kwargs):
             with torch.no_grad():
                 sample_imgs = decode_nc(G, sample_ni).cpu().numpy()
             # Save image to local target folder
-            save_image_path = os.path.join(run_dir,
-                                           f'fakes{global_step:06d}.png')
-            save_image_grid(sample_imgs,
-                            save_image_path,
-                            drange=[-1,1],
-                            grid_size=(int(np.sqrt(opts.sample_num)),
-                                       int(np.sqrt(opts.sample_num))))
+            save_sample_suffix = os.path.join(run_dir,
+                                           f'fakes{global_step:06d}')
+            if not opts.flag_3d:
+                # Save stiched sample images into one grid
+                save_sample_paths = [f"{save_sample_suffix}.png",]
+                save_image_grid(sample_imgs,
+                                save_sample_paths[0],
+                                drange=[-1,1],
+                                grid_size=(int(np.sqrt(opts.sample_num)),
+                                           int(np.sqrt(opts.sample_num))))
+            else:
+                # Save obj separately in obj files
+                save_sample_paths = [f"{save_sample_suffix}_{i}.obj"
+                                     for i in range(sample_imgs.shape[0])]
+                save_sdf_grids_to_meshes(sample_imgs, save_sample_suffix)
+
             if opts.copy_back:
-                copy_back_fn(save_image_path, local_dir)
+                for save_sample_path in save_sample_paths:
+                    copy_back_fn(save_sample_path, local_dir)
             # Save image to tensorboard
             stats_tfevents.add_image(f'fake', tvu.make_grid(
                 torch.tensor(sample_imgs[:16]),

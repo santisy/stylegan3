@@ -80,6 +80,8 @@ class HashAutoGenerator(nn.Module):
                  flag_3d: bool=False,
                  pg_init_iter_k: int=0,
                  invert_coord: bool=False,
+                 no_pre_pixelreshape: bool=False,
+                 decoder_resnet_num: int=2,
                  **kwargs):
         """
             Args:
@@ -181,6 +183,11 @@ class HashAutoGenerator(nn.Module):
                     (default: 0)
                 invert_coord: Invert the coordinate order
                     (default: False)
+                no_pre_pixelreshape: Do not use pixelshuffle to pre-reshape the 
+                    SDF grid.
+                    (default: False)
+                decoder_resnet_num: The decoder resnet number.
+                    (default: 2)
         """
 
         super().__init__()
@@ -242,14 +249,15 @@ class HashAutoGenerator(nn.Module):
 
         if not swin_transformer_encoder:
             self.img_encoder = Encoder(feat_coord_dim=feat_coord_dim,
-                                    ch=encoder_ch,
-                                    max_ch=512,
-                                    num_res_blocks=encoder_resnet_num,
-                                    num_downsamples=num_downsamples,
-                                    resolution=res_max,
-                                    use_kl_reg=use_kl_reg,
-                                    attn_resolutions=attn_resolutions,
-                                    flag_3d=flag_3d
+                                       ch=encoder_ch,
+                                       max_ch=512,
+                                       num_res_blocks=encoder_resnet_num,
+                                       num_downsamples=num_downsamples,
+                                       resolution=res_max,
+                                       use_kl_reg=use_kl_reg,
+                                       attn_resolutions=attn_resolutions,
+                                       flag_3d=flag_3d,
+                                       no_pre_pixelreshape=no_pre_pixelreshape
                                     )
         else:
             self.img_encoder = STEncoder(out_dim=feat_coord_dim,
@@ -313,8 +321,10 @@ class HashAutoGenerator(nn.Module):
             num_upsamples = int(math.log2(res_max/init_res))
             self.synthesis_network = VQDecoder(ch=init_dim,
                                                num_upsamples=num_upsamples,
-                                               num_res_blocks=1,
-                                               flag_3d=flag_3d)
+                                               num_res_blocks=decoder_resnet_num,
+                                               ch_min=encoder_ch,
+                                               flag_3d=flag_3d,
+                                               no_pre_pixelreshape=no_pre_pixelreshape)
         else:
             self.synthesis_network = SynthesisNetworkFromHash(style_dim,
                                                               res_max,
