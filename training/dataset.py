@@ -17,6 +17,7 @@ import PIL.Image
 import json
 import torch
 import dnnlib
+import h5py
 from utils.parallelzipfile import ParallelZipFile as ZipFile
 
 try:
@@ -182,6 +183,7 @@ class ImageFolderDataset(Dataset):
     ):
         self._path = path
         self._zipfile = None
+        self._h5file = None
         self.imagenet_flag = imagenet_flag
         self.flag_3d = flag_3d
 
@@ -198,6 +200,9 @@ class ImageFolderDataset(Dataset):
         elif self._file_ext(self._path) == '.zip':
             self._type = 'zip'
             self._all_fnames = set(self._get_zipfile().namelist())
+        elif self._file_ext(self._path) == '.h5':
+            self._type = 'h5'
+            self._all_fnames = set(list(self._get_h5file().keys()))
         else:
             raise IOError('Path must point to a directory or zip')
 
@@ -205,7 +210,10 @@ class ImageFolderDataset(Dataset):
             PIL.Image.init()
             self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in PIL.Image.EXTENSION)
         else:
-            self._image_fnames = sorted(fname for fname in self._all_fnames if fname.endswith(".npz"))
+            if self._type != 'h5':
+                self._image_fnames = sorted(fname for fname in self._all_fnames if fname.endswith(".npz"))
+            else:
+                self._image_fnames = sorted(list(self._all_fnames))
         # Filter out wrongly added validation file
         if split_val_n > 0:
             self._image_fnames = self._image_fnames[:-split_val_n]
@@ -222,6 +230,12 @@ class ImageFolderDataset(Dataset):
     def _file_ext(fname):
         return os.path.splitext(fname)[1].lower()
 
+    def _get_h5file(self):
+        assert self._type == 'h5'
+        if self._h5file is None:
+            self._h5file = h5py.File(self._path, "r")
+        return self._h5file
+
     def _get_zipfile(self):
         assert self._type == 'zip'
         if self._zipfile is None:
@@ -233,6 +247,8 @@ class ImageFolderDataset(Dataset):
             return open(os.path.join(self._path, fname), 'rb')
         if self._type == 'zip':
             return io.BytesIO(self._get_zipfile().read(fname))
+        if self._type == 'h5':
+            return self._get_h5file()[fname]
         return None
 
     def close(self):
@@ -249,7 +265,10 @@ class ImageFolderDataset(Dataset):
         fname = self._image_fnames[raw_idx]
         with self._open_file(fname) as f:
             if self.flag_3d:
-                image = np.load(f)["voxels"]
+                if self._type == 'h5':
+                    image = np.asarray(f)
+                else:
+                    image = np.load(f)["voxels"]
                 image = image[np.newaxis, :, :, :]
             elif pyspng is not None and self._file_ext(fname) == '.png':
                 image = pyspng.load(f.read())
