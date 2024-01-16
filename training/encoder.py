@@ -395,6 +395,7 @@ class Encoder(nn.Module):
                  use_kl_reg=False,
                  flag_3d: bool=False,
                  no_pre_pixelreshape: bool=False,
+                 resout_flag: bool=False,
                  **ignore_kwargs):
         super().__init__()
         if flag_3d:
@@ -416,6 +417,7 @@ class Encoder(nn.Module):
         self.use_kl_reg = use_kl_reg
         self.flag_3d = flag_3d
         self.no_pre_pixelreshape = no_pre_pixelreshape
+        self.resout_flag = resout_flag
 
         conv_ = nn.Conv2d if not flag_3d else nn.Conv3d
         num_groups = 32 if not flag_3d else 8
@@ -428,8 +430,11 @@ class Encoder(nn.Module):
                              padding=1)
 
         curr_res = resolution
+        #final_res = int(resolution / (2 ** num_downsamples))
         in_ch_mult = (1,)+tuple(ch_mult)
         self.down = nn.ModuleList()
+        if resout_flag:
+            self.res_shortcuts = nn.ModuleList()
         block_out = None
         for i_level in range(self.num_resolutions):
             block = nn.ModuleList()
@@ -454,6 +459,12 @@ class Encoder(nn.Module):
                                              conv_3D=flag_3d)
                 curr_res = curr_res // 2
             self.down.append(down)
+            if resout_flag:
+                if not flag_3d:
+                    out_shortcut = nn.Conv2d(block_out, feat_coord_dim, 1, 1)
+                else:
+                    out_shortcut = nn.Conv3d(block_out, feat_coord_dim, 1, 1)
+                self.res_shortcuts.append(out_shortcut)
 
         ## middle
         if attn_resolutions is not None:
@@ -484,18 +495,29 @@ class Encoder(nn.Module):
         # timestep embedding
         temb = None
         b = x.size(0)
-        if (getattr(self, "flag_3d", False) and
+        flag_3d = getattr(self, "flag_3d", False)
+        resout_flag = getattr(self, "resout_flag", False)
+
+        if (flag_3d and
             not getattr(self, "no_pre_pixelreshape", False)):
             x = pixelshuffle_down_3d(x)
+        if not flag_3d:
+            resize_op = F.avg_pool2d
+        else:
+            resize_op = F.avg_pool3d
 
         # downsampling
         hs = [self.conv_in(x)]
+        out = 0
         for i_level in range(self.num_resolutions):
             for i_block in range(self.num_res_blocks):
                 h = self.down[i_level].block[i_block](hs[-1], temb)
                 if len(self.down[i_level].attn) > 0:
                     h = self.down[i_level].attn[i_block](h)
                 hs.append(h)
+            if resout_flag:
+                pre_out = resize_op(out, 2) if i_level != 0 else 0
+                out = self.res_shortcuts[i_level](h) + pre_out
             if i_level != self.num_resolutions-1:
                 hs.append(self.down[i_level].downsample(hs[-1]))
 
@@ -504,8 +526,11 @@ class Encoder(nn.Module):
         #h = self.mid.block_1(h, temb)
         #h = self.mid.attn_1(h)
         #h = self.mid.block_2(h, temb)
-
         # end
+
+        if resout_flag:
+            return F.sigmoid(out)
+
         h = self.norm_out(h)
         h = nonlinearity(h)
         if not self.use_kl_reg:
@@ -530,6 +555,7 @@ class Decoder(nn.Module):
                  give_pre_end=False,
                  flag_3d=False,
                  no_pre_pixelreshape=False,
+                 resout_flag=False,
                  **ignorekwargs):
         super().__init__()
         if flag_3d:
@@ -550,6 +576,7 @@ class Decoder(nn.Module):
         self.give_pre_end = give_pre_end
         self.flag_3d = flag_3d
         self.no_pre_pixelreshape = no_pre_pixelreshape
+        self.resout_flag = resout_flag
 
         # compute in_ch_mult, block_in and curr_res at lowest res
         block_in = ch
@@ -567,6 +594,8 @@ class Decoder(nn.Module):
         #                                dropout=dropout)
 
         # upsampling
+        if resout_flag:
+            self.res_shortcuts = nn.ModuleList()
         self.up = nn.ModuleList()
         for i_level in range(self.num_resolutions):
             block = nn.ModuleList()
@@ -590,6 +619,12 @@ class Decoder(nn.Module):
                                        flag_3d=flag_3d)
                 #curr_res = curr_res * 2
             self.up.append(up) # prepend to get consistent order
+            if resout_flag:
+                if not flag_3d:
+                    out_shortcut = nn.Conv2d(block_out, out_ch, 1, 1)
+                else:
+                    out_shortcut = nn.Conv3d(block_out, out_ch, 1, 1)
+                self.res_shortcuts.append(out_shortcut)
 
         # end
         self.norm_out = Normalize(block_in, num_groups=num_groups)
@@ -600,6 +635,8 @@ class Decoder(nn.Module):
                               padding=1)
 
     def forward(self, z):
+        flag_3d = getattr(self, "flag_3d", False)
+        resout_flag = getattr(self, "resout_flag", False)
         #assert z.shape[1:] == self.z_shape[1:]
         self.last_z_shape = z.shape
 
@@ -614,15 +651,24 @@ class Decoder(nn.Module):
         # h = self.mid.block_2(h, temb)
 
         # upsampling
+        out = 0
         for i_level in range(self.num_resolutions):
             for i_block in range(self.num_res_blocks):
                 h = self.up[i_level].block[i_block](h, temb)
                 if len(self.up[i_level].attn) > 0:
                     h = self.up[i_level].attn[i_block](h)
+            if resout_flag:
+                pre_out = F.interpolate(out,
+                                        scale_factor=2,
+                                        mode='nearest') if i_level != 0 else 0
+                out = self.res_shortcuts[i_level](h) + pre_out
             if i_level != self.num_resolutions - 1:
                 h = self.up[i_level].upsample(h)
 
         # end
+        if resout_flag:
+            return F.tanh(out)
+
         if self.give_pre_end:
             return h
 
@@ -630,7 +676,7 @@ class Decoder(nn.Module):
         h = nonlinearity(h)
         h = self.conv_out(h)
         h = F.tanh(h)
-        if (getattr(self, "flag_3d", False) and 
+        if (flag_3d and 
             not getattr(self, "no_pre_pixelreshape", False)):
             h = pixelshuffle_up_3d(h)
         return h

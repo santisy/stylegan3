@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96G
-#SBATCH --gres=gpu:v100l:1
-#SBATCH --job-name="PR_1001_02_22800_50k"
+#SBATCH --gres=gpu:a100:1
+#SBATCH --job-name="PR_1030_03_11560_50k"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -21,6 +21,8 @@ echo NPROCS=$NPROCS
 source ~/.bashrc
 PR_PROCESS_NUM=4 python \
     improved_precision_recall.py \
-    datasets/lsunchurch_for_stylegan.zip \
-    metrics_cache/diff_1001_02_22800_50k.zip \
+    datasets/ffhq_256x256.zip \
+    metrics_cache/diff_1030_03_11520_50k.zip \
+    --only_precalc \
     --num_samples -1
+

@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:a100:2
-#SBATCH --job-name="diff_1020_01"
+#SBATCH --job-name="diff_0115_01"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -21,26 +21,26 @@ echo NPROCS=$NPROCS
 source ~/.bashrc
 
 # Running training jobs
-accelerate launch --main_process_port 29502 \
+accelerate launch --main_process_port 29514 \
     diffusions/train.py \
-    --exp_id diff_1020_01 \
-    --batch_size 32 \
-    --encoder_decoder_network training_runs/en_1011_01/network-snapshot-003607.pkl \
-    --dataset datasets/lsunchurch_for_stylegan.zip \
-    --dim 256 \
+    --exp_id diff_0115_01 \
+    --batch_size 48 \
+    --encoder_decoder_network training_runs/en_1204_01_c/network-snapshot-009619.pkl \
+    --dataset datasets/lsunchurch_total.zip \
+    --dim 448 \
     --sample_num 16 \
     --record_k 1 \
     --train_lr 8e-5 \
-    --feat_spatial_size 64 \
+    --feat_spatial_size 32 \
     --num_resnet_blocks '2,2,2,2' \
     --cosine_decay_max_steps 1000000 \
     --dim_mults '1,2,3,4' \
     --atten_layers '2,3,4' \
-    --snap_k 1280 \
-    --sample_k 1280 \
+    --snap_k 960 \
+    --sample_k 960 \
     --warmup_steps 10000 \
     --noise_scheduler cosine_variant_v2 \
-    --no_noise_perturb false \
+    --no_noise_perturb true \
     --use_min_snr false \
     --copy_back true \
     --work_on_tmp_dir true

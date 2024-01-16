@@ -82,6 +82,7 @@ class HashAutoGenerator(nn.Module):
                  invert_coord: bool=False,
                  no_pre_pixelreshape: bool=False,
                  decoder_resnet_num: int=2,
+                 resout_flag: bool=False,
                  **kwargs):
         """
             Args:
@@ -188,6 +189,8 @@ class HashAutoGenerator(nn.Module):
                     (default: False)
                 decoder_resnet_num: The decoder resnet number.
                     (default: 2)
+                resout_flag: residual in/out flag for encoder and decoder architecture.
+                    (default: False)
         """
 
         super().__init__()
@@ -257,7 +260,8 @@ class HashAutoGenerator(nn.Module):
                                        use_kl_reg=use_kl_reg,
                                        attn_resolutions=attn_resolutions,
                                        flag_3d=flag_3d,
-                                       no_pre_pixelreshape=no_pre_pixelreshape
+                                       no_pre_pixelreshape=no_pre_pixelreshape,
+                                       resout_flag=resout_flag
                                     )
         else:
             self.img_encoder = STEncoder(out_dim=feat_coord_dim,
@@ -324,7 +328,9 @@ class HashAutoGenerator(nn.Module):
                                                num_res_blocks=decoder_resnet_num,
                                                ch_min=encoder_ch,
                                                flag_3d=flag_3d,
-                                               no_pre_pixelreshape=no_pre_pixelreshape)
+                                               no_pre_pixelreshape=no_pre_pixelreshape,
+                                               resout_flag=resout_flag
+                                               )
         else:
             self.synthesis_network = SynthesisNetworkFromHash(style_dim,
                                                               res_max,

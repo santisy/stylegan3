@@ -257,6 +257,7 @@ def parse_comma_separated_list(s):
 @click.option('--pg_alter_opti', help='Progressive iteratively optimizing',                     type=bool, default=False, show_default=True)
 @click.option('--en_lr_mult', help='Encoder learning rate multiplier',                          type=float, default=1.0, show_default=True)
 @click.option('--invert_coord', help='Help invert coord flag.',                                 type=bool, default=False, show_default=True)
+@click.option('--resout_flag', help='Add residual out (or residual in) structure in encoder, decoder', type=bool, default=False, show_default=True)
 
 # 3D switch
 @click.option('--flag_3d', help='The flag indicating that we are encoding something 3D',        type=bool, default=False, show_default=True)
@@ -364,7 +365,8 @@ def main(**kwargs):
                                  pg_init_iter_k=opts.pg_init_iter_k,
                                  invert_coord=opts.invert_coord,
                                  no_pre_pixelreshape=opts.no_pre_pixelreshape,
-                                 decoder_resnet_num=opts.decoder_resnet_num
+                                 decoder_resnet_num=opts.decoder_resnet_num,
+                                 resout_flag=opts.resout_flag
                                  )
 
     c.D_kwargs = dnnlib.EasyDict(class_name='training.networks_stylegan2.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())

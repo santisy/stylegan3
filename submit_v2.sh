@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --gres=gpu:a100:2
-#SBATCH --job-name="en_0105_01_a"
+#SBATCH --job-name="en_0105_01"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -21,7 +21,7 @@ echo "working directory = "$SLURM_SUBMIT_DIR
 source ~/.bashrc
 
 # Running training jobs
-bash run.sh en_0105_01_a 2 24 \
+bash run.sh en_0105_01 2 24 \
     datasets/lsunchurch_total.zip \
     --gamma=4 \
     --table_size_log2=22 \
@@ -42,6 +42,7 @@ bash run.sh en_0105_01_a 2 24 \
     --num_downsamples=3 \
     --additional_decoder_conv=true \
     --use_kl_reg=false \
+    --noise_perturb=false \
     --hash_res_ratio 16 \
     --encoder_ch 64 \
     --align_corners true \
@@ -51,8 +52,6 @@ bash run.sh en_0105_01_a 2 24 \
     --pg_init_method "median" \
     --pg_init_iter_k 1000 \
     --pg_hr_iter_k 200 \
-    --noise_perturb=false \
-    --resume training_runs/en_0105_01/network-snapshot-013226.pkl \
     --pg_detach true
 
 #    --invert_coord true \

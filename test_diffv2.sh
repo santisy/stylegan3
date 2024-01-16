@@ -1,15 +1,15 @@
 #!/bin/bash
 python \
     diffusions/train.py \
-    --exp_id test_diff_3d \
-    --batch_size 16 \
-    --encoder_decoder_network training_runs/en3d_1210_01/network-snapshot-000400.pkl \
-    --dataset datasets/chair_sdf.zip \
-    --dim 128 \
-    --sample_num 4 \
+    --exp_id test_diff_2d \
+    --batch_size 48 \
+    --encoder_decoder_network training_runs/en_1204_01_c/network-snapshot-009619.pkl \
+    --dataset datasets/lsunchurch_total.zip \
+    --dim 448 \
+    --sample_num 16 \
     --record_k 1 \
     --train_lr 8e-5 \
-    --feat_spatial_size 16 \
+    --feat_spatial_size 32 \
     --num_resnet_blocks '2,2,2,2' \
     --cosine_decay_max_steps 1000000 \
     --dim_mults '1,2,3,4' \
@@ -21,5 +21,4 @@ python \
     --no_noise_perturb true \
     --use_min_snr false \
     --copy_back true \
-    --flag_3d true \
     --work_on_tmp_dir true

@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --gres=gpu:a100:2
-#SBATCH --job-name="en_0105_01_a"
+#SBATCH --job-name="en3d_0111_01"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -20,40 +20,39 @@ echo "working directory = "$SLURM_SUBMIT_DIR
 # Source the environment, load everything here
 source ~/.bashrc
 
+
+
 # Running training jobs
-bash run.sh en_0105_01_a 2 24 \
-    datasets/lsunchurch_total.zip \
+bash run.sh en3d_0111_01 2 4 \
+    datasets/chair_sdf.zip \
     --gamma=4 \
     --table_size_log2=22 \
-    --level_dim=4 \
+    --level_dim=2 \
     --feat_coord_dim=4 \
-    --img_snap=2 \
-    --init_res=64 \
+    --img_snap=20 \
+    --init_res=32 \
     --style_dim=512 \
     --img_size=256 \
     --table_num=16 \
-    --res_min=16 \
-    --init_dim=512 \
+    --res_min=8 \
+    --init_dim=128 \
     --tile_coord=true \
     --encoder_flag=true \
     --mini_linear_n_layers=3 \
     --disable_patch_gan=true \
     --feat_coord_dim_per_table=1 \
-    --num_downsamples=3 \
+    --num_downsamples=4 \
     --additional_decoder_conv=true \
     --use_kl_reg=false \
-    --hash_res_ratio 16 \
-    --encoder_ch 64 \
+    --noise_perturb=false \
+    --encoder_ch 32 \
+    --hash_res_ratio 4 \
     --align_corners true \
     --grid_type "tiled" \
-    --en_lr_mult 0.1 \
     --pg_hash_res true \
     --pg_init_method "median" \
-    --pg_init_iter_k 1000 \
-    --pg_hr_iter_k 200 \
-    --noise_perturb=false \
-    --resume training_runs/en_0105_01/network-snapshot-013226.pkl \
-    --pg_detach true
-
-#    --invert_coord true \
-#    --glr 0.001 \
+    --pg_init_iter_k 50 \
+    --pg_hr_iter_k 10 \
+    --en_lr_mult 0.1 \
+    --pg_detach true \
+    --flag_3d true

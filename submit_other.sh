@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH --time=1:00:0
+#SBATCH --time=10:00:0
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --job-name="imagenet_to_zip"
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --job-name="generated_to_zip"
 #SBATCH --output=./sbatch_logs/%j.log
 
 # list out some useful information (optional)
@@ -19,6 +19,16 @@ echo NPROCS=$NPROCS
 # Source the environment, load everything here
 source ~/.bashrc
 
+EXP_NAME=diff_1114_01
+CKPT_NUM=5760
+NUM="50k"
+
 # Running training jobs
 #cd datasets && python extract_imagenet.py
-cd metrics_cache && zip -rq diff_1016_02_16896.zip diff_1016_02_seed0 diff_1016_02_seed1 diff_1016_02_seed2 diff_1016_02_seed3
+cd metrics_cache && \
+    zip -rq ${EXP_NAME}_${CKPT_NUM}_${NUM}.zip \
+        ${EXP_NAME}_${CKPT_NUM}_seed7 \
+        ${EXP_NAME}_${CKPT_NUM}_seed8 \
+        ${EXP_NAME}_${CKPT_NUM}_seed9 \
+        ${EXP_NAME}_${CKPT_NUM}_seed10 \
+        ${EXP_NAME}_${CKPT_NUM}_seed11
