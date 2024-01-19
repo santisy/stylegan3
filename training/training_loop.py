@@ -29,7 +29,6 @@ from torch_utils import misc, training_stats
 from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
 from utils.dist_utils import dprint
 from utils.utils import delete_file
-from utils.utils import sdf_to_mesh
 from utils.utils import save_sdf_grids_to_meshes
 
 #----------------------------------------------------------------------------

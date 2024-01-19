@@ -83,6 +83,7 @@ class HashAutoGenerator(nn.Module):
                  no_pre_pixelreshape: bool=False,
                  decoder_resnet_num: int=2,
                  resout_flag: bool=False,
+                 half_precision: bool=False,
                  **kwargs):
         """
             Args:
@@ -191,6 +192,8 @@ class HashAutoGenerator(nn.Module):
                     (default: 2)
                 resout_flag: residual in/out flag for encoder and decoder architecture.
                     (default: False)
+                half_precision: Half precision or not.
+                    (default: False)
         """
 
         super().__init__()
@@ -219,6 +222,7 @@ class HashAutoGenerator(nn.Module):
         self.pg_hash_res = pg_hash_res
         self.flag_3d = flag_3d
         self.invert_coord = invert_coord
+        self.half_precision = half_precision
         assert unfold_k >= 1
 
         if flag_3d: 
@@ -373,7 +377,9 @@ class HashAutoGenerator(nn.Module):
         if key_codes is not None:
             feat_coords = key_codes
         elif not self.use_kl_reg:
-            feat_coords = self.img_encoder(img) # B x F_C_C x W x H
+            with torch.cuda.amp.autocast(enabled=self.half_precision):
+                feat_coords = self.img_encoder(img) # B x F_C_C x W x H
+            feat_coords = feat_coords.to(dtype=torch.float32)
         else:
             mu, log_var = self.img_encoder(img)
             log_var = torch.clamp(log_var, -30.0, 20.0)
@@ -544,7 +550,9 @@ class HashAutoGenerator(nn.Module):
             out = self.synthesis_network(
                 self.const_fourier_input.repeat(b, 1, 1, 1), feats_list)
         elif self.vq_decoder or flag_3d:
-            out = self.synthesis_network(feats)
+            with torch.cuda.amp.autocast(enabled=self.half_precision):
+                out = self.synthesis_network(feats)
+            out = out.to(dtype=torch.float32)
         else:
             modulation_s = torch.stack(modulation_s_list, dim=1) 
             modulation_s = modulation_s.repeat_interleave(
